@@ -68,6 +68,7 @@ static tc_alg_map maps[] = {
   { "nlcg", SPLATT_TC_NLCG },
   { "sgd", SPLATT_TC_SGD },
   { "als", SPLATT_TC_ALS },
+  { "spals", SPLATT_TC_SPALS},
   { "ccd", SPLATT_TC_CCD },
   { NULL,  SPLATT_TC_NALGS }
 };
@@ -276,6 +277,10 @@ int splatt_tc_cmd(
     success = mpi_tc_distribute_coarse(args.ifnames[0], args.ifnames[1],
         NULL, &train, &validate, &rinfo);
     break;
+  case SPLATT_TC_SPALS:
+    success = mpi_tc_distribute_coarse(args.ifnames[0], args.ifnames[1],
+        NULL, &train, &validate, &rinfo);
+    break;
   case SPLATT_TC_CCD:
     success = mpi_tc_distribute_med(args.ifnames[0], args.ifnames[1], NULL,
         &train, &validate, &rinfo);
@@ -392,6 +397,9 @@ int splatt_tc_cmd(
   case SPLATT_TC_ALS:
     printf("ALG=ALS\n\n");
     break;
+  case SPLATT_TC_SPALS:
+    printf("AL=SPALS\n\n");
+    break;
   default:
     /* error */
     fprintf(stderr, "\n\nSPLATT: unknown completion algorithm\n");
@@ -421,6 +429,9 @@ int splatt_tc_cmd(
   case SPLATT_TC_ALS:
     splatt_tc_als(train, validate, model, ws);
     break;
+  case SPLATT_TC_SPALS:
+    splatt_tc_spals(train, validate, model, ws);
+    break;      
   default:
     /* error */
     return SPLATT_ERROR_BADINPUT;

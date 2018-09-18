@@ -443,6 +443,9 @@ tc_ws * tc_ws_alloc(
     case SPLATT_TC_ALS:
       ws->regularization[m] = 1e2;
       break;
+    case SPLATT_TC_SPALS:
+      ws->regularization[m] = 1e2;
+      break;      
     case SPLATT_TC_NALGS:
       break;
     }
@@ -484,7 +487,15 @@ tc_ws * tc_ws_alloc(
         nmodes * rank * sizeof(val_t),       /* MTTKRP buffer */
         rank * rank * sizeof(val_t),         /* normal equations */
         rank * ALS_BUFSIZE * sizeof(val_t),  /* pre-normal equations buffer */
-        nmodes * rank * sizeof(val_t));      /* accum for pre-normal */
+                        nmodes * rank * sizeof(val_t));      /* accum for pre-normacasel */
+    break;
+  case SPLATT_TC_SPALS:
+    ws->thds = thd_init(nthreads, 5,
+        rank * sizeof(val_t),                /* prediction buffer */
+        nmodes * rank * sizeof(val_t),       /* MTTKRP buffer */
+        rank * rank * sizeof(val_t),         /* normal equations */
+        rank * ALS_BUFSIZE * sizeof(val_t),  /* pre-normal equations buffer */
+                        nmodes * rank * sizeof(val_t));      /* accum for pre-normacasel */
     break;
   case SPLATT_TC_NALGS:
     ws->thds = NULL;
