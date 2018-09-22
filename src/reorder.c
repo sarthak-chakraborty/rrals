@@ -522,7 +522,6 @@ permutation_t * perm_rand(
   return perm;
 }
 
-
 void shuffle_idx(
     idx_t * const arr,
     idx_t const N)
@@ -589,4 +588,42 @@ matrix_t * perm_matrix(
 }
 
 
+/* ALS Sampling methods */
 
+static unsigned int g_seed;
+
+// Used to seed the generator.           
+inline void fast_srand(int seed) {
+    g_seed = seed;
+}
+
+// Compute a pseudorandom integer.
+// Output value in range [0, 32767]
+inline int fast_rand(void) {
+    g_seed = (214013*g_seed+2531011);
+    return (g_seed>>16)&0x7FFF;
+}
+
+idx_t fast_rand_idx(void)
+{
+  /* TODO: modify this to work based on the size of idx_t */
+  return (idx_t) (fast_rand() << 16) | fast_rand();
+}
+
+void quick_shuffle(
+    idx_t * const arr,
+    idx_t const N)
+{
+  /* shuffle perm */
+  for(idx_t n=0; n < N-2; ++n) {
+    /* random idx in range [n, dims[m]) */
+    idx_t j = (fast_rand_idx() % (N - n)) + n;
+    /* idx_t j = N-1; */
+    /* idx_t r = fast_rand_idx(); */
+
+    /* swap n and j */
+    idx_t const tmp = arr[n];
+    arr[n] = arr[j];
+    arr[j] = tmp;
+  }
+}

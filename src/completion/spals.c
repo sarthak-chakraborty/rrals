@@ -398,7 +398,7 @@ static void p_process_slice(
     val_t * const neqs_buf_tree,
     idx_t * const nflush)
 {
-  idx_t const maxsamples = nfactors + 10;  
+  idx_t const maxsamples = 2 * nfactors;  
   idx_t const nmodes = csf->nmodes;
   csf_sparsity const * const pt = csf->pt + tile;
   val_t const * const restrict vals = pt->vals;
@@ -471,13 +471,13 @@ static void p_process_slice(
     /* NOTE: could possibly use the shuffle_idx function in reorder.c */
     idx_t const ntotal = end-start;
     idx_t iter_end;
-    if(ntotal > nfactors * 5) {
+    if(ntotal > nfactors * 7) {
       sample = 1;
       perm_i  = splatt_malloc(ntotal * sizeof(*perm_i));
       for(idx_t n=0; n < ntotal; ++n) {
         perm_i[n] = n;
-      }  
-      shuffle_idx(perm_i, ntotal);
+      }
+      quick_shuffle(perm_i, maxsamples);
       iter_end = start + maxsamples;
     } else {
       sample = 0;
@@ -487,7 +487,7 @@ static void p_process_slice(
     for(idx_t jj=start; jj < iter_end; ++jj) {
       val_t v;
       val_t * lastrow;
-      if(sample == 1) {        
+      if(sample == 1) {
         /* v = vals[jj]; */
         v = vals[perm_i[jj-start]];
         lastrow = lastmat + (inds[perm_i[jj-start]] * nfactors);
@@ -498,7 +498,7 @@ static void p_process_slice(
 
     /* for(idx_t jj=start; jj < end; ++jj) { */
     /*   val_t const v = vals[jj]; */
-      /* val_t const * const restrict lastrow = lastmat + (inds[jj] * nfactors); */
+    /*   val_t const * const restrict lastrow = lastmat + (inds[jj] * nfactors); */
 
       /* process nnz */
       for(idx_t f=0; f < nfactors; ++f) {
@@ -514,6 +514,9 @@ static void p_process_slice(
         hada = neqs_buf;
       }
     }
+    if(sample == 1){
+      splatt_free(perm_i);
+    }    
 
     idxstack[depth+1] = end;
 
@@ -534,9 +537,6 @@ static void p_process_slice(
       --depth;
     } while(depth > 0 && idxstack[depth+1] == fp[depth][idxstack[depth]+1]);
   } /* foreach fiber subtree */
-  if(sample == 1){
-    splatt_free(perm_i);
-  }
 
   /* accumulate into output row */
   for(idx_t f=0; f < nfactors; ++f) {
