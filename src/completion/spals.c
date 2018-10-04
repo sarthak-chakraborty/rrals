@@ -473,7 +473,12 @@ static void p_process_slice(
     idx_t iter_end;
     if(ntotal > nfactors * 7) {
       sample = 1;
-      perm_i  = splatt_malloc(ntotal * sizeof(*perm_i));
+      perm_i = splatt_malloc(ntotal * sizeof(*perm_i));
+      /* for(int n=0; n < ntotal; ++n) { */
+      /*   perm_i[n] = n; */
+      /* } */
+      /* quick_shuffle2(perm_i, maxsamples); */
+
       for(idx_t n=0; n < ntotal; ++n) {
         perm_i[n] = n;
       }
@@ -485,6 +490,11 @@ static void p_process_slice(
     }
     
     for(idx_t jj=start; jj < iter_end; ++jj) {
+      /* val_t const v = (sample == 1) ? vals[perm_i[jj-start]] : vals[jj]; */
+      /* val_t const * const lastrow = (sample == 1) */
+      /*   ? lastmat + (inds[perm_i[jj-start]] * nfactors) */
+      /*   : lastmat + (inds[jj] * nfactors); */
+        
       val_t v;
       val_t * lastrow;
       if(sample == 1) {
