@@ -398,7 +398,8 @@ static void p_process_slice(
     val_t * const neqs_buf_tree,
     idx_t * const nflush)
 {
-  idx_t const maxsamples = 2 * nfactors;  
+  idx_t const sample_threshold = 4 * nfactors;
+  idx_t const sample_rate = 100;
   idx_t const nmodes = csf->nmodes;
   csf_sparsity const * const pt = csf->pt + tile;
   val_t const * const restrict vals = pt->vals;
@@ -471,7 +472,7 @@ static void p_process_slice(
     /* NOTE: could possibly use the shuffle_idx function in reorder.c */
     idx_t const ntotal = end-start;
     idx_t iter_end;
-    if(ntotal > nfactors * 7) {
+    if(ntotal > sample_threshold) {
       sample = 1;
       perm_i = splatt_malloc(ntotal * sizeof(*perm_i));
       /* for(int n=0; n < ntotal; ++n) { */
@@ -479,22 +480,18 @@ static void p_process_slice(
       /* } */
       /* quick_shuffle2(perm_i, maxsamples); */
 
-      for(idx_t n=0; n < ntotal; ++n) {
-        perm_i[n] = n;
+      for(idx_t n=start; n < end; ++n) {
+        perm_i[n-start] = n;
       }
-      quick_shuffle(perm_i, maxsamples);
-      iter_end = start + maxsamples;
+      idx_t sample_size = sample_threshold + ((ntotal-sample_threshold) / sample_rate);
+      quick_shuffle(perm_i, sample_size);
+      iter_end = start + sample_size;
     } else {
       sample = 0;
       iter_end = end;
     }
     
     for(idx_t jj=start; jj < iter_end; ++jj) {
-      /* val_t const v = (sample == 1) ? vals[perm_i[jj-start]] : vals[jj]; */
-      /* val_t const * const lastrow = (sample == 1) */
-      /*   ? lastmat + (inds[perm_i[jj-start]] * nfactors) */
-      /*   : lastmat + (inds[jj] * nfactors); */
-        
       val_t v;
       val_t * lastrow;
       if(sample == 1) {

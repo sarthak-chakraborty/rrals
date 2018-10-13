@@ -18,7 +18,7 @@
 
 /* Use hardcoded 3-mode kernels when possible. Results in small speedups. */
 #ifndef USE_3MODE_OPT
-#define USE_3MODE_OPT 1
+#define USE_3MODE_OPT 0
 #endif
 
 
