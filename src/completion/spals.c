@@ -22,11 +22,6 @@
 #define USE_3MODE_OPT 0
 #endif
 
-#define my_min(a,b)               \
-  ({ __typeof__ (a) _a = (a);   \
-    __typeof__ (b) _b = (b);    \
-    _a < _b ? _a : _b; })
-
 
 /******************************************************************************
  * LAPACK PROTOTYPES
@@ -385,6 +380,14 @@ static void p_process_slice3(
 }
 
 
+/*
+ * RRALS - these are the permutation vectors for each thread.
+ * XXX: throw these into a workspace structure or something else not global...
+ */
+idx_t const PERM_INIT = 128;
+idx_t perm_i_lengths[1024];
+idx_t * perm_i_global[1024];
+
 static void p_process_slice(
     splatt_csf const * const csf,
     idx_t const tile,
@@ -444,10 +447,12 @@ static void p_process_slice(
 
   /* process each subtree */
   idx_t depth = 0;
-  
+
+
   int sample;
   /* strictly, this permutation array should be of size equal to end-start for each iter */
-  idx_t * perm_i;
+  int const tid = splatt_omp_get_thread_num();
+  idx_t * perm_i = NULL;
   while(idxstack[1] < fp[0][i+1]) {
 
     /* move down to nnz node while forming hada */
@@ -474,12 +479,13 @@ static void p_process_slice(
     idx_t iter_end;
     if(ntotal > sample_threshold) {
       sample = 1;
-      perm_i = splatt_malloc(ntotal * sizeof(*perm_i));
-      /* for(int n=0; n < ntotal; ++n) { */
-      /*   perm_i[n] = n; */
-      /* } */
-      /* quick_shuffle2(perm_i, maxsamples); */
-
+      /* realloc if needed */
+      if(ntotal > perm_i_lengths[tid]) {
+        perm_i_lengths[tid] = ntotal;
+        splatt_free(perm_i_global[tid]);
+        perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
+      }
+      perm_i = perm_i_global[tid];
       for(idx_t n=start; n < end; ++n) {
         perm_i[n-start] = n;
       }
@@ -490,7 +496,7 @@ static void p_process_slice(
       sample = 0;
       iter_end = end;
     }
-    
+
     for(idx_t jj=start; jj < iter_end; ++jj) {
       val_t v;
       val_t * lastrow;
@@ -502,10 +508,6 @@ static void p_process_slice(
         v = vals[jj];
         lastrow = lastmat + (inds[jj] * nfactors);
       }
-
-    /* for(idx_t jj=start; jj < end; ++jj) { */
-    /*   val_t const v = vals[jj]; */
-    /*   val_t const * const restrict lastrow = lastmat + (inds[jj] * nfactors); */
 
       /* process nnz */
       for(idx_t f=0; f < nfactors; ++f) {
@@ -521,9 +523,6 @@ static void p_process_slice(
         hada = neqs_buf;
       }
     }
-    if(sample == 1){
-      splatt_free(perm_i);
-    }    
 
     idxstack[depth+1] = end;
 
@@ -981,6 +980,13 @@ void splatt_tc_spals(
     printf("\n");
   }
 
+  #pragma omp parallel
+  {
+    int const tid = splatt_omp_get_thread_num();
+    perm_i_lengths[tid] = PERM_INIT;
+    perm_i_global[tid] = splatt_malloc(PERM_INIT * sizeof(*perm_i_global));
+  }
+
 
   val_t loss = tc_loss_sq(train, model, ws);
   val_t frobsq = tc_frob_sq(model, ws);
@@ -1036,6 +1042,12 @@ void splatt_tc_spals(
     }
 
   } /* foreach iteration */
+
+  #pragma omp parallel
+  {
+    int const tid = splatt_omp_get_thread_num();
+    splatt_free(perm_i_global[tid]);
+  }
 
 #ifdef SPLATT_USE_MPI
   /* UNDO TERRIBLE HACK */
