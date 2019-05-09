@@ -384,9 +384,17 @@ static void p_process_slice3(
  * RRALS - these are the permutation vectors for each thread.
  * XXX: throw these into a workspace structure or something else not global...
  */
+idx_t const MAX_THREADS = 1024;
 idx_t const PERM_INIT = 128;
-idx_t perm_i_lengths[1024];
-idx_t * perm_i_global[1024];
+idx_t perm_i_lengths[MAX_THREADS];
+idx_t * perm_i_global[MAX_THREADS];
+
+/*
+ * Each thread is given a random seed to use for sampling. We pad them to
+ * ensure each falls on a different cache line (to avoid false sharing).
+ */
+idx_t const SEED_PADDING = 16;
+unsigned int * sample_seeds;
 
 static void p_process_slice(
     splatt_csf const * const csf,
@@ -490,7 +498,7 @@ static void p_process_slice(
         perm_i[n-start] = n;
       }
       idx_t sample_size = sample_threshold + ((ntotal-sample_threshold) / sample_rate);
-      quick_shuffle(perm_i, sample_size);
+      quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
       iter_end = start + sample_size;
     } else {
       sample = 0;
@@ -980,11 +988,15 @@ void splatt_tc_spals(
     printf("\n");
   }
 
+  sample_seeds = splatt_malloc(
+      splatt_omp_get_num_threads() * SEED_PADDING * sizeof(*sample_seeds));
+
   #pragma omp parallel
   {
     int const tid = splatt_omp_get_thread_num();
     perm_i_lengths[tid] = PERM_INIT;
     perm_i_global[tid] = splatt_malloc(PERM_INIT * sizeof(*perm_i_global));
+    sample_seeds[tid * SEED_PADDING] = tid;
   }
 
 
@@ -1048,6 +1060,7 @@ void splatt_tc_spals(
     int const tid = splatt_omp_get_thread_num();
     splatt_free(perm_i_global[tid]);
   }
+  splatt_free(sample_seeds);
 
 #ifdef SPLATT_USE_MPI
   /* UNDO TERRIBLE HACK */
