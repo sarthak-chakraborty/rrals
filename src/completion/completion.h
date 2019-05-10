@@ -50,7 +50,8 @@ typedef enum
   SPLATT_TC_CCD,
   SPLATT_TC_ALS,
   SPLATT_TC_NALGS,
-  SPLATT_TC_SPALS
+  SPLATT_TC_SPALS,
+  SPLATT_TC_RRALS
 } splatt_tc_type;
 
 
@@ -175,6 +176,13 @@ void splatt_tc_spals(
     sptensor_t * const validate,
     tc_model * const model,
     tc_ws * const ws);
+
+void splatt_tc_rrals(
+    sptensor_t * train,
+    sptensor_t * const validate,
+    tc_model * const model,
+    tc_ws * const ws);
+
 
 /******************************************************************************
  * WORKSPACE FUNCTIONS

@@ -1,10 +1,10 @@
 
 #include "completion.h"
-#include "../csf.h"
 #include "../util.h"
 #include "../reorder.h"         /* `shuffle_idx` needed for random sampling */
 
 #include "../io.h"
+#include "../ccp/ccp.h"
 #include "../sort.h"
 
 #include <math.h>
@@ -49,6 +49,106 @@
   #define LAPACK_DSYRK dsyrk_
 #endif
 
+
+/******************************************************************************
+ * Slice-COO (S-COO) data structure
+ * - used in HyperTensor [Kaya & Ucar 2016] and GenTen [Phipps & Kolda 2018]
+ * - I made up the name and will ping Oguz/Eric/Tammy for their preference.
+ * - This should be moved to its own file in src/ so we can use it in other
+ *   kernels later.
+ *****************************************************************************/
+typedef struct
+{
+  sptensor_t * coo; /* the actual tensor data */
+
+  /* We just pull these out of coo to save some typing */
+  idx_t nnz;
+  idx_t nmodes;
+  idx_t dims[MAX_NMODES];
+
+  /* Equivalent to row_ptr of CSR. Points into slice_nnz */
+  idx_t * slice_ptr[MAX_NMODES];
+
+  /* Each is a list of length nnz and indexes into coo->inds and coo->vals */
+  idx_t * slice_nnz[MAX_NMODES];
+} scoo_t;
+
+
+scoo_t * scoo_alloc(
+  sptensor_t const * const coo)
+{
+  scoo_t * scoo = splatt_malloc(sizeof(*scoo));
+
+  /* Deep copy the COO tensor.
+   * TODO: support shallow copies? */
+  scoo->coo = tt_copy(coo);
+
+  scoo->nnz = coo->nnz;
+  scoo->nmodes = coo->nmodes;
+
+  for(idx_t m=0; m < coo->nmodes; ++m) {
+    scoo->dims[m] = coo->dims[m];
+
+    /* first count the nnz per slice and do an exclusive prefix sum */
+    idx_t * slice_counts = tt_get_hist(scoo->coo, m);
+    prefix_sum_exc(slice_counts, scoo->dims[m]);
+
+    /* now go over all non-zeros and store their locations in slice_nnz */
+    scoo->slice_nnz[m] = splatt_malloc(scoo->nnz * sizeof(**scoo->slice_nnz));
+    for(idx_t n=0; n < scoo->nnz; ++n) {
+      idx_t const slice = coo->ind[m][n];
+      idx_t const ptr = slice_counts[slice]++;
+      scoo->slice_nnz[m][ptr] = n;
+    }
+
+    /* now right-shift slice_counts into slice_ptrs to turn it back into an
+     * exclusive prefix (row_ptr) */
+    scoo->slice_ptr[m] = splatt_malloc(
+        (scoo->dims[m]+1) * sizeof(**scoo->slice_ptr));
+    scoo->slice_ptr[m][0] = 0;
+    for(idx_t i=1; i < scoo->dims[m] + 1; ++i) {
+      scoo->slice_ptr[m][i] = slice_counts[i-1];
+    }
+    splatt_free(slice_counts);
+  } /* foreach mode */
+
+
+  /* TODO: move these to unit tests */
+  for(idx_t m=0; m < scoo->nmodes; ++m) {
+    idx_t nnz = 0;
+    for(idx_t i=0; i < scoo->dims[m]; ++i) {
+      idx_t index;
+      for(index = scoo->slice_ptr[m][i];
+          index < scoo->slice_ptr[m][i+1];
+          ++index) {
+
+        ++nnz;
+
+        idx_t const ptr = scoo->slice_nnz[m][index];
+        idx_t const mode_j = scoo->coo->ind[m][ptr];
+        assert(scoo->coo->ind[m][ptr] == i);
+      }
+    }
+    assert(nnz == scoo->nnz);
+  }
+
+  return scoo;
+}
+
+
+void scoo_free(
+  scoo_t * scoo)
+{
+  if(scoo == NULL) {
+    return;
+  }
+  for(idx_t m=0; m < scoo->nmodes; ++m) {
+    splatt_free(scoo->slice_ptr[m]);
+    splatt_free(scoo->slice_nnz[m]);
+  }
+  tt_free(scoo->coo);
+  splatt_free(scoo);
+}
 
 
 /******************************************************************************
@@ -135,251 +235,6 @@ static inline void p_vec_oprod(
 
 
 
-static void p_process_tile3(
-    splatt_csf const * const csf,
-    idx_t const tile,
-    tc_model * const model,
-    tc_ws * const ws,
-    thd_info * const thd_densefactors,
-    int const tid)
-{
-  csf_sparsity const * const pt = csf->pt + tile;
-  /* empty tile */
-  if(pt->vals == 0) {
-    return;
-  }
-
-  idx_t const nfactors = model->rank;
-
-  idx_t const * const restrict sptr = pt->fptr[0];
-  idx_t const * const restrict fptr = pt->fptr[1];
-  idx_t const * const restrict fids = pt->fids[1];
-  idx_t const * const restrict inds = pt->fids[2];
-
-  val_t const * const restrict avals = model->factors[csf->dim_perm[1]];
-  val_t const * const restrict bvals = model->factors[csf->dim_perm[2]];
-  val_t const * const restrict vals = pt->vals;
-
-  /* buffers */
-  val_t * const restrict accum = ws->thds[tid].scratch[1];
-  val_t * const restrict mat_accum = ws->thds[tid].scratch[3];
-
-  /* update each slice */
-  idx_t const nslices = pt->nfibs[0];
-  for(idx_t i=0; i < nslices; ++i) {
-    /* fid is the row we are actually updating */
-    idx_t const fid = (pt->fids[0] == NULL) ? i : pt->fids[0][i];
-
-    /* replicated structures */
-    val_t * const restrict out_row =
-        (val_t *) thd_densefactors[tid].scratch[0] + (fid * nfactors);
-    val_t * const restrict neqs =
-        (val_t *) thd_densefactors[tid].scratch[1] + (fid*nfactors*nfactors);
-
-    idx_t bufsize = 0; /* how many hada vecs are in mat_accum */
-    idx_t nflush = 1;  /* how many times we have flushed to add to the neqs */
-    val_t * restrict hada = mat_accum;
-
-    /* process each fiber */
-    for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
-      val_t const * const restrict av = avals  + (fids[fib] * nfactors);
-
-      /* first entry of the fiber is used to initialize accum */
-      idx_t const jjfirst  = fptr[fib];
-      val_t const vfirst   = vals[jjfirst];
-      val_t const * const restrict bv = bvals + (inds[jjfirst] * nfactors);
-      for(idx_t r=0; r < nfactors; ++r) {
-        accum[r] = vfirst * bv[r];
-        hada[r] = av[r] * bv[r];
-      }
-      hada += nfactors;
-      if(++bufsize == ALS_BUFSIZE) {
-        /* add to normal equations */
-        p_vec_oprod(mat_accum, nfactors, bufsize, nflush++, neqs);
-        hada = mat_accum;
-        bufsize = 0;
-      }
-
-      /* foreach nnz in fiber */
-      for(idx_t jj=fptr[fib]+1; jj < fptr[fib+1]; ++jj) {
-        val_t const v = vals[jj];
-        val_t const * const restrict bv = bvals + (inds[jj] * nfactors);
-        for(idx_t r=0; r < nfactors; ++r) {
-          accum[r] += v * bv[r];
-          hada[r] = av[r] * bv[r];
-        }
-        hada += nfactors;
-        if(++bufsize == ALS_BUFSIZE) {
-          /* add to normal equations */
-          p_vec_oprod(mat_accum, nfactors, bufsize, nflush++, neqs);
-          hada = mat_accum;
-          bufsize = 0;
-        }
-      }
-
-      /* accumulate into output row */
-      for(idx_t r=0; r < nfactors; ++r) {
-        out_row[r] += accum[r] * av[r];
-      }
-    } /* foreach fiber */
-
-    /* final flush */
-    p_vec_oprod(mat_accum, nfactors, bufsize, nflush++, neqs);
-  } /* foreach slice */
-}
-
-
-
-static void p_process_slice(
-    splatt_csf const * const csf,
-    idx_t const tile,
-    idx_t const i,
-    val_t * * mvals,
-    idx_t const nfactors,
-    val_t * const restrict out_row,
-    val_t * const accum,
-    val_t * const restrict neqs,
-    val_t * const restrict neqs_buf,
-    val_t * const neqs_buf_tree,
-    idx_t * const nflush);
-
-
-
-static void p_process_tile(
-    splatt_csf const * const csf,
-    idx_t const tile,
-    tc_model * const model,
-    tc_ws * const ws,
-    thd_info * const thd_densefactors,
-    int const tid)
-{
-  csf_sparsity const * const pt = csf->pt + tile;
-  /* empty tile */
-  if(pt->vals == 0) {
-    return;
-  }
-
-  idx_t const nmodes = csf->nmodes;
-#if USE_3MODE_OPT
-  if(nmodes == 3) {
-    p_process_tile3(csf, tile, model, ws, thd_densefactors, tid);
-    return;
-  }
-#endif
-
-  idx_t const nfactors = model->rank;
-
-  /* buffers */
-  val_t * const restrict accum = ws->thds[tid].scratch[1];
-  val_t * const restrict mat_accum = ws->thds[tid].scratch[3];
-  val_t * const restrict hada_accum  = ws->thds[tid].scratch[4];
-
-  val_t * mvals[MAX_NMODES];
-  for(idx_t m=0; m < nmodes; ++m) {
-    mvals[m] = model->factors[csf->dim_perm[m]];
-  }
-
-  /* update each slice */
-  idx_t const nslices = pt->nfibs[0];
-  for(idx_t i=0; i < nslices; ++i) {
-    /* fid is the row we are actually updating */
-    idx_t const fid = (pt->fids[0] == NULL) ? i : pt->fids[0][i];
-
-    /* replicated structures */
-    val_t * const restrict out_row =
-        (val_t *) thd_densefactors[tid].scratch[0] + (fid * nfactors);
-    val_t * const restrict neqs =
-        (val_t *) thd_densefactors[tid].scratch[1] + (fid*nfactors*nfactors);
-
-    idx_t bufsize = 0; /* how many hada vecs are in mat_accum */
-    idx_t nflush = 1;  /* how many times we have flushed to add to the neqs */
-    val_t * restrict hada = mat_accum;
-
-    /* process each fiber */
-    p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush);
-  } /* foreach slice */
-}
-
-
-
-
-
-static void p_process_slice3(
-    splatt_csf const * const csf,
-    idx_t const tile,
-    idx_t const i,
-    val_t const * const restrict A,
-    val_t const * const restrict B,
-    idx_t const nfactors,
-    val_t * const restrict out_row,
-    val_t * const restrict accum,
-    val_t * const restrict neqs,
-    val_t * const restrict neqs_buf,
-    idx_t * const nflush)
-{
-  csf_sparsity const * const pt = csf->pt + tile;
-  idx_t const * const restrict sptr = pt->fptr[0];
-  idx_t const * const restrict fptr = pt->fptr[1];
-  idx_t const * const restrict fids = pt->fids[1];
-  idx_t const * const restrict inds = pt->fids[2];
-  val_t const * const restrict vals = pt->vals;
-
-  val_t * hada = neqs_buf;
-
-  idx_t bufsize = 0;
-
-  /* process each fiber */
-  for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
-    val_t const * const restrict av = A  + (fids[fib] * nfactors);
-
-    /* first entry of the fiber is used to initialize accum */
-    idx_t const jjfirst  = fptr[fib];
-    val_t const vfirst   = vals[jjfirst];
-    val_t const * const restrict bv = B + (inds[jjfirst] * nfactors);
-    for(idx_t r=0; r < nfactors; ++r) {
-      accum[r] = vfirst * bv[r];
-      hada[r] = av[r] * bv[r];
-    }
-
-    hada += nfactors;
-    if(++bufsize == ALS_BUFSIZE) {
-      /* add to normal equations */
-      p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
-      bufsize = 0;
-      hada = neqs_buf;
-    }
-
-    /* foreach nnz in fiber */
-    for(idx_t jj=fptr[fib]+1; jj < fptr[fib+1]; ++jj) {
-      val_t const v = vals[jj];
-      val_t const * const restrict bv = B + (inds[jj] * nfactors);
-      for(idx_t r=0; r < nfactors; ++r) {
-        accum[r] += v * bv[r];
-        hada[r] = av[r] * bv[r];
-      }
-
-      hada += nfactors;
-      if(++bufsize == ALS_BUFSIZE) {
-        /* add to normal equations */
-        p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
-        bufsize = 0;
-        hada = neqs_buf;
-      }
-    }
-
-    /* accumulate into output row */
-    for(idx_t r=0; r < nfactors; ++r) {
-      out_row[r] += accum[r] * av[r];
-    }
-
-  } /* foreach fiber */
-
-  /* final flush */
-  p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
-}
-
-
 /*
  * RRALS - these are the permutation vectors for each thread.
  * XXX: throw these into a workspace structure or something else not global...
@@ -397,9 +252,9 @@ static idx_t const SEED_PADDING = 16;
 static unsigned int * sample_seeds;
 
 static void p_process_slice(
-    splatt_csf const * const csf,
-    idx_t const tile,
-    idx_t const i,
+    scoo_t const * const scoo,
+    idx_t const slice_id,
+    idx_t const mode,
     val_t * * mvals,
     idx_t const nfactors,
     val_t * const restrict out_row,
@@ -409,159 +264,108 @@ static void p_process_slice(
     val_t * const neqs_buf_tree,
     idx_t * const nflush)
 {
-  idx_t const sample_threshold = 4 * nfactors;
-  idx_t const sample_rate = 100;
-  idx_t const nmodes = csf->nmodes;
-  csf_sparsity const * const pt = csf->pt + tile;
-  val_t const * const restrict vals = pt->vals;
-  if(vals == NULL) {
-    return;
+  idx_t const nmodes = scoo->nmodes;
+  val_t const * const restrict vals = scoo->coo->vals;
+
+  idx_t const * const restrict slice_ptr = scoo->slice_ptr[mode];
+  idx_t const * const restrict slice_nnz = scoo->slice_nnz[mode];
+  idx_t const * const * const inds = scoo->coo->ind;
+
+
+  idx_t const slice_start = slice_ptr[slice_id];
+  idx_t       slice_end   = slice_ptr[slice_id+1];
+  idx_t const slice_size = slice_end - slice_start;
+
+
+  for(idx_t f=0; f < nfactors; ++f) {
+    accum[f] = 0.;
   }
 
-#if USE_3MODE_OPT
-  if(nmodes == 3) {
-    p_process_slice3(csf, tile, i, mvals[1], mvals[2], nfactors, out_row,
-        accum, neqs, neqs_buf, nflush);
-    return;
-  }
-#endif
-
-  idx_t const * const * const restrict fp = (idx_t const * const *) pt->fptr;
-  idx_t const * const * const restrict fids = (idx_t const * const *) pt->fids;
-  idx_t const * const restrict inds = fids[nmodes-1];
-  val_t const * const restrict lastmat = mvals[nmodes-1];
-
+  /* buffer of rows to form normal equations */
   idx_t bufsize = 0;
-  val_t * hada = neqs_buf;
+  val_t * hada = neqs_buf; /* each row is a hadamard product */
 
-  /* push initial idx initialize idxstack */
-  idx_t idxstack[MAX_NMODES];
-  idxstack[0] = i;
-  for(idx_t m=1; m < nmodes-1; ++m) {
-    idxstack[m] = fp[m-1][idxstack[m-1]];
-  }
-
-  idx_t const top_id = (pt->fids[0] == NULL) ? i : pt->fids[0][i];
-
-  val_t const * const restrict rootrow = mvals[0] + (top_id * nfactors);
-  for(idx_t f=0; f < nfactors; ++f) {
-    neqs_buf_tree[f] = 1.;
-  }
-
-  /* clear out accumulation buffer */
-  for(idx_t f=0; f < nfactors; ++f) {
-    accum[f + nfactors] = 0;
-  }
-
-  /* process each subtree */
-  idx_t depth = 0;
-
-
-  int sample;
-  /* strictly, this permutation array should be of size equal to end-start for each iter */
+  /* sampling buffers */
   int const tid = splatt_omp_get_thread_num();
   idx_t * perm_i = NULL;
-  while(idxstack[1] < fp[0][i+1]) {
 
-    /* move down to nnz node while forming hada */
-    for(; depth < nmodes-2; ++depth) {
-      val_t const * const restrict drow
-          = mvals[depth+1] + (fids[depth+1][idxstack[depth+1]] * nfactors);
-      val_t const * const restrict cur_buf = neqs_buf_tree + ((depth+0) * nfactors);
-      val_t * const restrict nxt_buf = neqs_buf_tree + ((depth+1) * nfactors);
-
-      for(idx_t f=0; f < nfactors; ++f) {
-        nxt_buf[f] = cur_buf[f] * drow[f];
-      }
-    }
-    val_t * const restrict last_hada = neqs_buf_tree + (depth * nfactors);
-    val_t * const restrict accum_nnz = accum + ((depth+1) * nfactors);
-
-    /* process all nonzeros [start, end) */
-    idx_t const start = fp[depth][idxstack[depth]];
-    idx_t const end   = fp[depth][idxstack[depth]+1];
-
-    /* create random sample array */
-    /* NOTE: could possibly use the shuffle_idx function in reorder.c */
-    idx_t const ntotal = end-start;
-    idx_t iter_end;
-    if(ntotal > sample_threshold) {
-      sample = 1;
-      /* realloc if needed */
-      if(ntotal > perm_i_lengths[tid]) {
-        perm_i_lengths[tid] = ntotal;
-        splatt_free(perm_i_global[tid]);
-        perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
-      }
-      perm_i = perm_i_global[tid];
-      for(idx_t n=start; n < end; ++n) {
-        perm_i[n-start] = n;
-      }
-      idx_t sample_size = SS_MIN(ntotal, sample_threshold + ((ntotal-sample_threshold) / sample_rate));
-      quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-      iter_end = start + sample_size;
-    } else {
-      sample = 0;
-      iter_end = end;
+  idx_t const sample_threshold = 4 * nfactors;
+  idx_t const sample_rate = 100;
+  int sample = 0;
+  if(slice_size > sample_threshold) {
+    sample = 1;
+    /* realloc sample buffer if needed */
+    if(slice_size > perm_i_lengths[tid]) {
+      perm_i_lengths[tid] = slice_size;
+      splatt_free(perm_i_global[tid]);
+      perm_i_global[tid] = splatt_malloc(slice_size * sizeof(*perm_i_global));
     }
 
-    for(idx_t jj=start; jj < iter_end; ++jj) {
-      val_t v;
-      val_t * lastrow;
-      if(sample == 1) {
-        /* v = vals[jj]; */
-        v = vals[perm_i[jj-start]];
-        lastrow = lastmat + (inds[perm_i[jj-start]] * nfactors);
-      } else {
-        v = vals[jj];
-        lastrow = lastmat + (inds[jj] * nfactors);
-      }
-
-      /* process nnz */
-      for(idx_t f=0; f < nfactors; ++f) {
-        accum_nnz[f] += v * lastrow[f];
-        hada[f] = last_hada[f] * lastrow[f];
-      }
-
-      /* add to normal equations */
-      hada += nfactors;
-      if(++bufsize == ALS_BUFSIZE) {
-        p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
-        bufsize = 0;
-        hada = neqs_buf;
-      }
+    /* fill buffer with indices and shuffle to get sampled nnz */
+    /* RRALS-TODO: can we intead just sample nnz_ptr[]? Or do an initial shuffle
+     * at the beginning of RRALS (or every few its) and instead just choose
+     * a rand starting index? Then proceed and process non-zeros
+     * [rand_start, (rand_start+sample_size) % end).
+     *
+     * Current implementation is still O(nnz) instead of O(sampled nnz). */
+    perm_i = perm_i_global[tid];
+    for(idx_t n=slice_start; n < slice_end; ++n) {
+      perm_i[n-slice_start] = n;
     }
-
-    idxstack[depth+1] = end;
-
-    /* propagate MTTKRP up */
-    do {
-      val_t const * const restrict fibrow
-          = mvals[depth] + (fids[depth][idxstack[depth]] * nfactors);
-      val_t * const restrict up   = accum + ((depth+0) * nfactors);
-      val_t * const restrict down = accum + ((depth+1) * nfactors);
-
-      /*
-       * up[:] += down[:] * fibrow[:];
-       * down[:] = 0.;
-       */
-      p_add_hada_clear(up, down, fibrow, nfactors);
-
-      ++idxstack[depth];
-      --depth;
-    } while(depth > 0 && idxstack[depth+1] == fp[depth][idxstack[depth]+1]);
-  } /* foreach fiber subtree */
-
-  /* accumulate into output row */
-  for(idx_t f=0; f < nfactors; ++f) {
-    out_row[f] += accum[f + nfactors];
+    idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
+    idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
+    quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    slice_end = slice_start + sample_size;
   }
 
-  /* final flush */
+  /* foreach nnz in slice */
+  for(idx_t x = slice_start; x < slice_end; ++x) {
+    /* initialize buffers */
+    for(idx_t f=0; f < nfactors; ++f) {
+      hada[f] = 1.;
+    }
+
+    /* which non-zero to process */
+    idx_t nnz_ptr = slice_nnz[x];
+    if(sample) {
+      nnz_ptr = slice_nnz[perm_i[x - slice_start]];
+    }
+
+    /* compute hadamard product */
+    for(idx_t m=0; m < nmodes; ++m) {
+      if(m == mode) {
+        continue;
+      }
+      idx_t const row_id = inds[m][nnz_ptr];
+      val_t const * const restrict row = &(mvals[m][row_id * nfactors]);
+      for(idx_t f=0; f < nfactors; ++f) {
+        hada[f] *= row[f];
+      }
+    }
+    /* accumulate MTTKRP */
+    for(idx_t f=0; f < nfactors; ++f) {
+      accum[f] += vals[nnz_ptr] * hada[f];
+    }
+
+    hada += nfactors;
+    /* if buffer is full, flush and accumulate into neqs */
+    if(++bufsize == ALS_BUFSIZE) {
+      /* add to normal equations and reset hada */
+      p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+      bufsize = 0;
+      hada = neqs_buf;
+    }
+
+    /* store mttkrp result in RHS of linear system */
+    for(idx_t f=0; f < nfactors; ++f) {
+      out_row[f] += accum[f];
+      accum[f] = 0.;
+    }
+  }
+
+  /* flush and accumulate into neqs */
   p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
 }
-
-
 
 
 
@@ -571,36 +375,33 @@ static void p_process_slice(
 * @brief Compute the i-ith row of the MTTKRP, form the normal equations, and
 *        store the new row.
 *
-* @param csf The tensor of training data.
-* @param tile The tile that row i resides in.
-* @param i The row to update.
+* @param scoo The tensor of training data.
+* @param slice_id The row to update.
 * @param reg Regularization parameter for the i-th row.
 * @param model The model to update
 * @param ws Workspace.
 * @param tid OpenMP thread id.
 */
 static void p_update_slice(
-    splatt_csf const * const csf,
-    idx_t const tile,
-    idx_t const i,
+    scoo_t const * const scoo,
+    idx_t const mode,
+    idx_t const slice_id,
     val_t const reg,
     tc_model * const model,
     tc_ws * const ws,
     int const tid)
 {
-  idx_t const nmodes = csf->nmodes;
+  idx_t const nmodes = scoo->nmodes;
   idx_t const nfactors = model->rank;
-  csf_sparsity const * const pt = csf->pt + tile;
 
   /* fid is the row we are actually updating */
-  idx_t const fid = (pt->fids[0] == NULL) ? i : pt->fids[0][i];
 #ifdef SPLATT_USE_MPI
-  assert(fid < model->globmats[csf->dim_perm[0]]->I);
-  val_t * const restrict out_row = model->globmats[csf->dim_perm[0]]->vals +
-      (fid * nfactors);
+  assert(slice_id < model->globmats[mode]->I);
+  val_t * const restrict out_row = model->globmats[mode]->vals +
+      (slice_id * nfactors);
 #else
-  val_t * const restrict out_row = model->factors[csf->dim_perm[0]] +
-      (fid * nfactors);
+  val_t * const restrict out_row = model->factors[mode] +
+      (slice_id * nfactors);
 #endif
   val_t * const restrict accum = ws->thds[tid].scratch[1];
   val_t * const restrict neqs  = ws->thds[tid].scratch[2];
@@ -628,12 +429,12 @@ static void p_update_slice(
   /* grab factors */
   val_t * mats[MAX_NMODES];
   for(idx_t m=0; m < nmodes; ++m) {
-    mats[m] = model->factors[csf->dim_perm[m]];
+    mats[m] = model->factors[m];
   }
 
   /* do MTTKRP + dsyrk */
-  p_process_slice(csf, 0, i, mats, nfactors, out_row, accum, neqs, mat_accum,
-      hada_accum, &nflush);
+  p_process_slice(scoo, slice_id, mode, mats, nfactors, out_row, accum, neqs,
+      mat_accum, hada_accum, &nflush);
 
   /* add regularization to the diagonal */
   for(idx_t f=0; f < nfactors; ++f) {
@@ -688,11 +489,14 @@ static void p_densemode_als_update(
 
   #pragma omp barrier
 
+  /* XXX S-COO needs something here */
+#if 0
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
     p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid);
   }
+#endif
 
   /* aggregate partial products */
   thd_reduce(thd_densefactors, 0,
@@ -852,7 +656,7 @@ static void p_init_mpi(
  *****************************************************************************/
 
 
-void splatt_tc_spals(
+void splatt_tc_rrals(
     sptensor_t * train,
     sptensor_t * const validate,
     tc_model * const model,
@@ -871,6 +675,12 @@ void splatt_tc_spals(
   if(rank == 0) {
     printf("BUFSIZE=%d\n", ALS_BUFSIZE);
     printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
+  }
+
+  /* XXX: temporarily disabling dense mode replication */
+  ws->num_dense = 0;
+  for(idx_t m=0; m < nmodes; ++m ){
+    ws->isdense[m] = 0;
   }
 
   /* store dense modes redundantly among threads */
@@ -896,12 +706,8 @@ void splatt_tc_spals(
   /* load-balanced partition each mode for threads */
   idx_t * parts[MAX_NMODES];
 
-  splatt_csf csf[MAX_NMODES];
-
-  /* convert training data to CSF-ALLMODE */
-  double * opts = splatt_default_opts();
-  opts[SPLATT_OPTION_NTHREADS] = ws->nthreads;
-  opts[SPLATT_OPTION_CSF_ALLOC] = SPLATT_CSF_ALLMODE;
+  /* Allocate a slice-indexed COO tensor. */
+  scoo_t * scoo = scoo_alloc(train);
 
 #ifdef SPLATT_USE_MPI
   sptensor_t * both = NULL;
@@ -933,6 +739,7 @@ void splatt_tc_spals(
     assert(tt_filtered->indmap[m] == NULL);
 #endif
 
+#if 0
     if(ws->isdense[m]) {
       /* standard CSF allocation for sparse modes */
       opts[SPLATT_OPTION_TILE] = SPLATT_DENSETILE;
@@ -956,6 +763,8 @@ void splatt_tc_spals(
 
       parts[m] = csf_partition_1d(csf+m, 0, ws->nthreads);
     }
+#endif
+
 
 #ifdef SPLATT_USE_MPI
     tt_free(tt_filtered);
@@ -967,7 +776,7 @@ void splatt_tc_spals(
     assert(totnnz == rinfo->global_nnz);
 #endif
 #endif
-  }
+  } /* foreach mode */
 
 #ifdef SPLATT_USE_MPI
   p_init_mpi(train, model, ws);
@@ -1018,13 +827,18 @@ void splatt_tc_spals(
         timer_fstart(&mode_timer);
 
         if(ws->isdense[m]) {
-          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid);
+          /* XXX */
+          //p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid);
 
         /* dense modes are easy */
         } else {
           /* update each row in parallel */
-          for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid);
+          /* RRALS-TODO: we can maybe statically load balance this loop using
+           * CCP (chains-on-chains partitioning) by using ccp.c:partition_1d()
+           */
+          #pragma omp for schedule(dynamic, 8) nowait
+          for(idx_t i=0; i < scoo->dims[m]; ++i)  {
+            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid);
           }
         }
 
@@ -1068,12 +882,11 @@ void splatt_tc_spals(
   train = train_back;
 #endif
 
+  scoo_free(scoo);
+
   /* cleanup */
-  for(idx_t m=0; m < nmodes; ++m) {
-    csf_free_mode(csf+m);
-    splatt_free(parts[m]);
-  }
-  if(ws->maxdense_dim > 0) {
+  /* XXX disabled dense temporarily */
+  if(false && ws->maxdense_dim > 0) {
     thd_free(thd_densefactors, ws->nthreads);
   }
 }

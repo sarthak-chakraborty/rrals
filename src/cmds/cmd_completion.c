@@ -23,6 +23,8 @@ static char tc_doc[] =
   "splatt-complete -- Complete a tensor with missing entries.\n"
   "Available tensor completion algorithms are:\n"
   "  als\t\talternating least squares\n"
+  "  spals\t\t\n"
+  "  rrals\t\t\n"
   "  ccd\t\tcoordinate descent (CCD++)\n"
   "  sgd\t\tstochastic gradient descent\n";
 #if 0
@@ -69,6 +71,7 @@ static tc_alg_map maps[] = {
   { "sgd", SPLATT_TC_SGD },
   { "als", SPLATT_TC_ALS },
   { "spals", SPLATT_TC_SPALS},
+  { "rrals", SPLATT_TC_RRALS},
   { "ccd", SPLATT_TC_CCD },
   { NULL,  SPLATT_TC_NALGS }
 };
@@ -274,10 +277,8 @@ int splatt_tc_cmd(
   /* read + distribute tensors */
   switch(args.which_alg) {
   case SPLATT_TC_ALS:
-    success = mpi_tc_distribute_coarse(args.ifnames[0], args.ifnames[1],
-        NULL, &train, &validate, &rinfo);
-    break;
   case SPLATT_TC_SPALS:
+  case SPLATT_TC_RRALS:
     success = mpi_tc_distribute_coarse(args.ifnames[0], args.ifnames[1],
         NULL, &train, &validate, &rinfo);
     break;
@@ -398,7 +399,10 @@ int splatt_tc_cmd(
     printf("ALG=ALS\n\n");
     break;
   case SPLATT_TC_SPALS:
-    printf("AL=SPALS\n\n");
+    printf("ALG=SPALS\n\n");
+    break;
+  case SPLATT_TC_RRALS:
+    printf("ALG=RRALS\n\n");
     break;
   default:
     /* error */
@@ -431,7 +435,10 @@ int splatt_tc_cmd(
     break;
   case SPLATT_TC_SPALS:
     splatt_tc_spals(train, validate, model, ws);
-    break;      
+    break;
+  case SPLATT_TC_RRALS:
+    splatt_tc_rrals(train, validate, model, ws);
+    break;
   default:
     /* error */
     return SPLATT_ERROR_BADINPUT;

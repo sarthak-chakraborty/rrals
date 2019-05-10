@@ -611,9 +611,7 @@ void quick_shuffle(
   /* shuffle perm */
   for(idx_t n=0; n < N-2; ++n) {
     /* random idx in range [n, dims[m]) */
-    idx_t j = (fast_rand(seed) % (N - n)) + n; /* Not sure if fast_rand_idx() needed here */
-    /* idx_t j = N-1; */
-    /* idx_t r = fast_rand_idx(); */
+    idx_t j = (fast_rand(seed) % (N - n)) + n;
 
     /* swap n and j */
     idx_t const tmp = arr[n];

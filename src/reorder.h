@@ -76,6 +76,21 @@ void shuffle_idx(
     idx_t const N);
 
 
+#define quick_shuffle splatt_quick_shuffle
+
+/**
+ * @brief A fast, re-entrant shuffle_idx().
+ *
+ * @param arr The array to shuffle.
+ * @param N The number of elements.
+ * @param seed The random seed for re-entry.
+ */
+void quick_shuffle(
+    idx_t * const arr,
+    idx_t const N,
+    unsigned int * seed);
+
+
 #define build_pptr splatt_build_pptr
 /**
 * @brief Build a data structure containing the size of each partition (in
