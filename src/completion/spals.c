@@ -384,10 +384,18 @@ static void p_process_slice3(
  * RRALS - these are the permutation vectors for each thread.
  * XXX: throw these into a workspace structure or something else not global...
  */
-static idx_t const MAX_THREADS = 1024;
+// static idx_t const MAX_THREADS = 1024;
+
+
+#ifndef SPALS_MAX_THREADS
+#define SPALS_MAX_THREADS 1024
+#endif
+
 static idx_t const PERM_INIT = 128;
-static idx_t perm_i_lengths[MAX_THREADS];
-static idx_t * perm_i_global[MAX_THREADS];
+// static idx_t perm_i_lengths[MAX_THREADS];
+static idx_t perm_i_lengths[SPALS_MAX_THREADS];
+// static idx_t * perm_i_global[MAX_THREADS];
+static idx_t * perm_i_global[SPALS_MAX_THREADS];
 
 /*
  * Each thread is given a random seed to use for sampling. We pad them to
@@ -868,10 +876,10 @@ void splatt_tc_spals(
   int const rank = 0;
 #endif
 
-  if(rank == 0) {
-    printf("BUFSIZE=%d\n", ALS_BUFSIZE);
-    printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
-  }
+  // if(rank == 0) {
+  //   printf("BUFSIZE=%d\n", ALS_BUFSIZE);
+  //   printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
+  // }
 
   /* store dense modes redundantly among threads */
   thd_info * thd_densefactors = NULL;
@@ -882,16 +890,17 @@ void splatt_tc_spals(
         ws->maxdense_dim * sizeof(int)); /* nflush */
 
 
-    if(rank == 0) {
-      printf("REPLICATING MODES:");
-      for(idx_t m=0; m < nmodes; ++m) {
-        if(ws->isdense[m]) {
-          printf(" %"SPLATT_PF_IDX, m+1);
-        }
-      }
-      printf("\n\n");
-    }
+    // if(rank == 0) {
+    //   printf("REPLICATING MODES:");
+    //   for(idx_t m=0; m < nmodes; ++m) {
+    //     if(ws->isdense[m]) {
+    //       printf(" %"SPLATT_PF_IDX, m+1);
+    //     }
+    //   }
+    //   printf("\n\n");
+    // }
   }
+
 
   /* load-balanced partition each mode for threads */
   idx_t * parts[MAX_NMODES];
@@ -984,12 +993,12 @@ void splatt_tc_spals(
   train = tt_filter;
 #endif
 
-  if(rank == 0) {
-    printf("\n");
-  }
+  // if(rank == 0) {
+  //   printf("\n");
+  // }
 
   sample_seeds = splatt_malloc(
-      splatt_omp_get_num_threads() * SEED_PADDING * sizeof(*sample_seeds));
+      splatt_omp_get_max_threads() * SEED_PADDING * sizeof(*sample_seeds));
 
   #pragma omp parallel
   {
@@ -1014,9 +1023,12 @@ void splatt_tc_spals(
       int const tid = splatt_omp_get_thread_num();
 
       for(idx_t m=0; m < nmodes; ++m) {
+        // printf("%d. Hello\n", m);
+
         #pragma omp master
         timer_fstart(&mode_timer);
 
+      
         if(ws->isdense[m]) {
           p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid);
 
@@ -1032,14 +1044,17 @@ void splatt_tc_spals(
 
 #ifdef SPLATT_USE_MPI
         p_update_factor_all2all(model, ws, m);
+        // printf("e=%d, m=%d. Hello\n", e, m);
+
 #endif
         #pragma omp barrier
         #pragma omp master
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
-            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-                mode_timer.seconds);
+            ;
+            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+                // mode_timer.seconds);
           }
         }
         #pragma omp barrier

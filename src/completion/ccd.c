@@ -1090,10 +1090,10 @@ void splatt_tc_ccd(
   int const rank = 0;
 #endif
 
-  if(rank == 0) {
-    printf("INNER ITS: %"SPLATT_PF_IDX"\n", ws->num_inner);
-    printf("USING 3MODE OPTS: %d\n", USE_3MODE_OPT);
-  }
+  // if(rank == 0) {
+  //   printf("INNER ITS: %"SPLATT_PF_IDX"\n", ws->num_inner);
+  //   printf("USING 3MODE OPTS: %d\n", USE_3MODE_OPT);
+  // }
 
   /* setup dense modes */
   thd_info * thd_densefactors = NULL;
@@ -1103,20 +1103,20 @@ void splatt_tc_ccd(
         ws->maxdense_dim * sizeof(val_t)); /* denominator */
 
 
-    if(rank == 0) {
-      printf("REPLICATING MODES:");
-      for(idx_t m=0; m < nmodes; ++m) {
-        if(ws->isdense[m]) {
-          printf(" %"SPLATT_PF_IDX, m+1);
-        }
-      }
-      printf("\n");
-    }
+    // if(rank == 0) {
+    //   printf("REPLICATING MODES:");
+    //   for(idx_t m=0; m < nmodes; ++m) {
+    //     if(ws->isdense[m]) {
+    //       printf(" %"SPLATT_PF_IDX, m+1);
+    //     }
+    //   }
+    //   printf("\n");
+    // }
   }
 
-  if(rank == 0) {
-    printf("\n");
-  }
+  // if(rank == 0) {
+  //   printf("\n");
+  // }
 
   /* convert training data to CSF-ONEMODE with full tiling */
   double * opts = splatt_default_opts();
@@ -1201,9 +1201,9 @@ void splatt_tc_ccd(
 
 #if MEASURE_DRIFT == 1
     val_t const gold = tc_loss_sq(train, model, ws);
-    if(rank == 0) {
-      printf("  residual: %e actual: %e diff: %e\n", loss, gold, loss - gold);
-    }
+    // if(rank == 0) {
+    //   printf("  residual: %e actual: %e diff: %e\n", loss, gold, loss - gold);
+    // }
 #endif
 
     /* compute RMSE and adjust learning rate */
@@ -1219,15 +1219,15 @@ void splatt_tc_ccd(
 #ifdef SPLATT_USE_MPI
   fflush(stdout);
   MPI_Barrier(ws->rinfo->comm_3d);
-  printf("  rank: %d residual %0.3fs dense: %0.3fs sparse: %0.3fs newcol: %0.3fs\n",
-    ws->rinfo->rank, ws->resid_time.seconds, ws->dense_time.seconds,
-    ws->sparse_time.seconds, ws->newcol_time.seconds);
+  // printf("  rank: %d residual %0.3fs dense: %0.3fs sparse: %0.3fs newcol: %0.3fs\n",
+  //   ws->rinfo->rank, ws->resid_time.seconds, ws->dense_time.seconds,
+  //   ws->sparse_time.seconds, ws->newcol_time.seconds);
   fflush(stdout);
   MPI_Barrier(ws->rinfo->comm_3d);
 #else
-  printf("  residual %0.3fs dense: %0.3fs sparse: %0.3fs newcol: %0.3fs\n",
-    ws->resid_time.seconds, ws->dense_time.seconds, ws->sparse_time.seconds,
-    ws->newcol_time.seconds);
+  // printf("  residual %0.3fs dense: %0.3fs sparse: %0.3fs newcol: %0.3fs\n",
+  //   ws->resid_time.seconds, ws->dense_time.seconds, ws->sparse_time.seconds,
+  //   ws->newcol_time.seconds);
 #endif
 
   p_transpose_model(model);

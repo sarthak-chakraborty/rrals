@@ -108,9 +108,13 @@ static void p_print_progress(
     val_t const rmse_vl,
     tc_ws const * const ws)
 {
-  printf("epoch:%4"SPLATT_PF_IDX"   loss: %0.5e   "
-      "RMSE-tr: %0.5e   RMSE-vl: %0.5e   time: %0.3fs\n",
-      epoch, loss, rmse_tr, rmse_vl, ws->tc_time.seconds);
+
+  printf("%"SPLATT_PF_IDX"\t%0.5e\t%0.5e\t%0.5e\t%0.3f\n", epoch, loss, rmse_tr, rmse_vl, ws->tc_time.seconds);
+
+
+  // printf("epoch:%4"SPLATT_PF_IDX"   loss: %0.5e   "
+  //     "RMSE-tr: %0.5e   RMSE-vl: %0.5e   time: %0.3fs\n",
+  //     epoch, loss, rmse_tr, rmse_vl, ws->tc_time.seconds);
 }
 
 
@@ -545,6 +549,9 @@ bool tc_converge(
     idx_t const epoch,
     tc_ws * const ws)
 {
+
+
+
 #ifdef SPLATT_USE_MPI
   val_t const train_rmse = sqrt(loss / ws->rinfo->global_nnz);
 #else
@@ -568,7 +575,7 @@ bool tc_converge(
   if(ws->rinfo->rank == 0) {
     p_print_progress(epoch, loss, train_rmse, val_rmse, ws);
   }
-#else
+#else 
   p_print_progress(epoch, loss, train_rmse, val_rmse, ws);
 #endif
 

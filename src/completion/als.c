@@ -811,10 +811,10 @@ void splatt_tc_als(
   int const rank = 0;
 #endif
 
-  if(rank == 0) {
-    printf("BUFSIZE=%d\n", ALS_BUFSIZE);
-    printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
-  }
+  // if(rank == 0) {
+  //   printf("BUFSIZE=%d\n", ALS_BUFSIZE);
+  //   printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
+  // }
 
   /* store dense modes redundantly among threads */
   thd_info * thd_densefactors = NULL;
@@ -825,16 +825,17 @@ void splatt_tc_als(
         ws->maxdense_dim * sizeof(int)); /* nflush */
 
 
-    if(rank == 0) {
-      printf("REPLICATING MODES:");
-      for(idx_t m=0; m < nmodes; ++m) {
-        if(ws->isdense[m]) {
-          printf(" %"SPLATT_PF_IDX, m+1);
-        }
-      }
-      printf("\n\n");
-    }
+    // if(rank == 0) {
+    //   printf("REPLICATING MODES:");
+    //   for(idx_t m=0; m < nmodes; ++m) {
+    //     if(ws->isdense[m]) {
+    //       printf(" %"SPLATT_PF_IDX, m+1);
+    //     }
+    //   }
+    //   printf("\n\n");
+    // }
   }
+
 
   /* load-balanced partition each mode for threads */
   idx_t * parts[MAX_NMODES];
@@ -927,9 +928,9 @@ void splatt_tc_als(
   train = tt_filter;
 #endif
 
-  if(rank == 0) {
-    printf("\n");
-  }
+  // if(rank == 0) {
+  //   printf("\n");
+  // }
 
 
   val_t loss = tc_loss_sq(train, model, ws);
@@ -969,10 +970,10 @@ void splatt_tc_als(
         #pragma omp master
         {
           timer_stop(&mode_timer);
-          if(rank == 0) {
-            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-                mode_timer.seconds);
-          }
+          // if(rank == 0) {
+          //   printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+          //       mode_timer.seconds);
+          // }
         }
         #pragma omp barrier
       } /* foreach mode */

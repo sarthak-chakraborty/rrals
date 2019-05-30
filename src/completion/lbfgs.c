@@ -95,6 +95,8 @@ void splatt_tc_lbfgs(
     tc_model * const model,
     tc_ws * const ws)
 {
+
+
   /* convert training data to CSF-ALLMODE */
   double * opts = splatt_default_opts();
   opts[SPLATT_OPTION_CSF_ALLOC] = SPLATT_CSF_ONEMODE;

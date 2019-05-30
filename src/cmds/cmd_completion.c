@@ -34,6 +34,8 @@ static char tc_doc[] =
 #endif
 
 
+#define TC_BETA 257
+#define TC_ALPHA 256
 #define TC_REG 255
 #define TC_NOWRITE 254
 #define TC_SEED 253
@@ -53,6 +55,8 @@ static struct argp_option tc_options[] = {
   {"seed", TC_SEED, "SEED", 0, "random seed (default: system time)"},
   {"time", TC_TIME, "SECONDS", 0, "maximum number of seconds, (default: none)"},
   {"tol", TC_TOL, "TOLERANCE", 0, "converge if RMSE-vl has not improved by TOLERANCE in 20 epochs (default: 1e-4)"},
+  {"alpha", TC_ALPHA, "ALPHA", 0},
+  {"beta", TC_BETA, "BETA", 0},
   {0}
 };
 
@@ -126,6 +130,9 @@ typedef struct
   double max_seconds;
   idx_t nfactors;
   idx_t nthreads;
+
+  int alpha;
+  int beta;
 } tc_cmd_args;
 
 
@@ -154,6 +161,8 @@ static void default_tc_opts(
   args->seed = time(NULL);
   args->set_tolerance = false;
   args->num_inner = 1;
+  args->alpha = 4;
+  args->beta = 100;
 }
 
 
@@ -216,6 +225,12 @@ static error_t parse_tc_opt(
     break;
   case TC_INNER:
     args->num_inner = strtoull(arg, &buf, 10);
+    break;
+  case TC_ALPHA:
+    args->alpha = atoi(arg);
+    break;
+  case TC_BETA:
+    args->beta = atoi(arg);
     break;
 
   case ARGP_KEY_ARG:
@@ -329,6 +344,13 @@ int splatt_tc_cmd(
   tc_model * model = tc_model_alloc(train, args.nfactors, args.which_alg);
 #endif
 
+
+  ///////////////////////////////////////////////////////////////
+  int alpha = args.alpha;
+  int beta = args.beta;
+  ///////////////////////////////////////////////////////////////
+
+
   tc_ws * ws = tc_ws_alloc(train, model, args.nthreads);
 #ifdef SPLATT_USE_MPI
   ws->rinfo = &rinfo;
@@ -354,65 +376,65 @@ int splatt_tc_cmd(
   }
   ws->num_inner = args.num_inner;
 
-#ifdef SPLATT_USE_MPI
-  if(rinfo.rank == 0) {
-#endif
-  printf("Factoring ------------------------------------------------------\n");
-  printf("NFACTORS=%"SPLATT_PF_IDX" MAXITS=%"SPLATT_PF_IDX" ",
-      model->rank, ws->max_its);
-  if(args.set_timeout) {
-    printf("MAXTIME=NONE ");
-  } else {
-    printf("MAXTIME=%0.1fs ", ws->max_seconds);
-  }
-  printf("TOL=%0.1e ", ws->tolerance);
-  printf("SEED=%u ", args.seed);
-#ifdef SPLATT_USE_MPI
-  printf("RANKS=%d ", rinfo.npes);
-#endif
-  printf("THREADS=%"SPLATT_PF_IDX"\nSTEP=%0.3e REG=%0.3e\n",
-       ws->nthreads, ws->learn_rate, ws->regularization[0]);
-  if(args.ifnames[1] != NULL) {
-    printf("VALIDATION=%s\n", args.ifnames[1]);
-  }
-  if(args.ifnames[2] != NULL) {
-    printf("TEST=%s\n", args.ifnames[2]);
-  }
+// #ifdef SPLATT_USE_MPI
+//   if(rinfo.rank == 0) {
+// #endif
+//   printf("Factoring ------------------------------------------------------\n");
+//   printf("NFACTORS=%"SPLATT_PF_IDX" MAXITS=%"SPLATT_PF_IDX" ",
+//       model->rank, ws->max_its);
+//   if(args.set_timeout) {
+//     printf("MAXTIME=NONE ");
+//   } else {
+//     printf("MAXTIME=%0.1fs ", ws->max_seconds);
+//   }
+//   printf("TOL=%0.1e ", ws->tolerance);
+//   printf("SEED=%u ", args.seed);
+// #ifdef SPLATT_USE_MPI
+//   printf("RANKS=%d ", rinfo.npes);
+// #endif
+//   printf("THREADS=%"SPLATT_PF_IDX"\nSTEP=%0.3e REG=%0.3e\n",
+//        ws->nthreads, ws->learn_rate, ws->regularization[0]);
+//   if(args.ifnames[1] != NULL) {
+//     printf("VALIDATION=%s\n", args.ifnames[1]);
+//   }
+//   if(args.ifnames[2] != NULL) {
+//     printf("TEST=%s\n", args.ifnames[2]);
+//   }
 
-  switch(args.which_alg) {
-  case SPLATT_TC_GD:
-    printf("ALG=GD\n\n");
-    break;
-  case SPLATT_TC_NLCG:
-    printf("ALG=NLCG\n\n");
-    break;
-  case SPLATT_TC_LBFGS:
-    printf("ALG=LBFGS\n\n");
-    break;
-  case SPLATT_TC_SGD:
-    printf("ALG=SGD\n\n");
-    break;
-  case SPLATT_TC_CCD:
-    printf("ALG=CCD\n\n");
-    break;
-  case SPLATT_TC_ALS:
-    printf("ALG=ALS\n\n");
-    break;
-  case SPLATT_TC_SPALS:
-    printf("ALG=SPALS\n\n");
-    break;
-  case SPLATT_TC_RRALS:
-    printf("ALG=RRALS\n\n");
-    break;
-  default:
-    /* error */
-    fprintf(stderr, "\n\nSPLATT: unknown completion algorithm\n");
-    return SPLATT_ERROR_BADINPUT;
-  }
+//   switch(args.which_alg) {
+//   case SPLATT_TC_GD:
+//     printf("ALG=GD\n\n");
+//     break;
+//   case SPLATT_TC_NLCG:
+//     printf("ALG=NLCG\n\n");
+//     break;
+//   case SPLATT_TC_LBFGS:
+//     printf("ALG=LBFGS\n\n");
+//     break;
+//   case SPLATT_TC_SGD:
+//     printf("ALG=SGD\n\n");
+//     break;
+//   case SPLATT_TC_CCD:
+//     printf("ALG=CCD\n\n");
+//     break;
+//   case SPLATT_TC_ALS:
+//     printf("ALG=ALS\n\n");
+//     break;
+//   case SPLATT_TC_SPALS:
+//     printf("ALG=SPALS\n\n");
+//     break;
+//   case SPLATT_TC_RRALS:
+//     printf("ALG=RRALS\n\n");
+//     break;
+//   default:
+//     /* error */
+//     fprintf(stderr, "\n\nSPLATT: unknown completion algorithm\n");
+//     return SPLATT_ERROR_BADINPUT;
+//   }
 
-#ifdef SPLATT_USE_MPI
-  }
-#endif
+// #ifdef SPLATT_USE_MPI
+//   }
+// #endif
 
   switch(args.which_alg) {
   case SPLATT_TC_GD:
@@ -437,7 +459,7 @@ int splatt_tc_cmd(
     splatt_tc_spals(train, validate, model, ws);
     break;
   case SPLATT_TC_RRALS:
-    splatt_tc_rrals(train, validate, model, ws);
+    splatt_tc_rrals(train, validate, model, ws, alpha, beta);
     break;
   default:
     /* error */
