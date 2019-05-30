@@ -239,17 +239,26 @@ static inline void p_vec_oprod(
  * RRALS - these are the permutation vectors for each thread.
  * XXX: throw these into a workspace structure or something else not global...
  */
-static idx_t const MAX_THREADS = 1024;
+// static idx_t const MAX_THREADS = 1024;
+
+
+#ifndef RRALS_MAX_THREADS
+#define RRALS_MAX_THREADS 1024
+#endif
+
+
 static idx_t const PERM_INIT = 128;
-static idx_t perm_i_lengths[MAX_THREADS];
-static idx_t * perm_i_global[MAX_THREADS];
+// static idx_t perm_i_lengths[MAX_THREADS];
+static idx_t perm_i_lengths[RRALS_MAX_THREADS];
+// static idx_t * perm_i_global[MAX_THREADS];
+static idx_t * perm_i_global[RRALS_MAX_THREADS];
 
 /*
  * Each thread is given a random seed to use for sampling. We pad them to
  * ensure each falls on a different cache line (to avoid false sharing).
  */
 static idx_t const SEED_PADDING = 16;
-static unsigned int * sample_seeds;
+static unsigned int * sample_seeds = NULL;
 
 static void p_process_slice(
     scoo_t const * const scoo,
@@ -262,7 +271,11 @@ static void p_process_slice(
     val_t * const restrict neqs,
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
-    idx_t * const nflush)
+    idx_t * const nflush,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac)
 {
   idx_t const nmodes = scoo->nmodes;
   val_t const * const restrict vals = scoo->coo->vals;
@@ -289,8 +302,8 @@ static void p_process_slice(
   int const tid = splatt_omp_get_thread_num();
   idx_t * perm_i = NULL;
 
-  idx_t const sample_threshold = 4 * nfactors;
-  idx_t const sample_rate = 100;
+  idx_t const sample_threshold = alpha * nfactors;
+  idx_t const sample_rate = beta;
   int sample = 0;
   if(slice_size > sample_threshold) {
     sample = 1;
@@ -314,6 +327,9 @@ static void p_process_slice(
     }
     idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
     idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
+    act[mode][slice_id] = slice_size;
+    frac[mode][slice_id] = sample_size;
+    // printf("%d\n",sample_size);
     quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
     slice_end = slice_start + sample_size;
   }
@@ -389,7 +405,11 @@ static void p_update_slice(
     val_t const reg,
     tc_model * const model,
     tc_ws * const ws,
-    int const tid)
+    int const tid,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac)
 {
   idx_t const nmodes = scoo->nmodes;
   idx_t const nfactors = model->rank;
@@ -434,7 +454,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(scoo, slice_id, mode, mats, nfactors, out_row, accum, neqs,
-      mat_accum, hada_accum, &nflush);
+      mat_accum, hada_accum, &nflush, alpha, beta, act, frac);
 
   /* add regularization to the diagonal */
   for(idx_t f=0; f < nfactors; ++f) {
@@ -660,7 +680,9 @@ void splatt_tc_rrals(
     sptensor_t * train,
     sptensor_t * const validate,
     tc_model * const model,
-    tc_ws * const ws)
+    tc_ws * const ws,
+    int alpha,
+    int beta)
 {
   idx_t const nmodes = train->nmodes;
   idx_t const nfactors = model->rank;
@@ -672,10 +694,10 @@ void splatt_tc_rrals(
   int const rank = 0;
 #endif
 
-  if(rank == 0) {
-    printf("BUFSIZE=%d\n", ALS_BUFSIZE);
-    printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
-  }
+  // if(rank == 0) {
+  //   printf("BUFSIZE=%d\n", ALS_BUFSIZE);
+  //   printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
+  // }
 
   /* XXX: temporarily disabling dense mode replication */
   ws->num_dense = 0;
@@ -692,15 +714,15 @@ void splatt_tc_rrals(
         ws->maxdense_dim * sizeof(int)); /* nflush */
 
 
-    if(rank == 0) {
-      printf("REPLICATING MODES:");
-      for(idx_t m=0; m < nmodes; ++m) {
-        if(ws->isdense[m]) {
-          printf(" %"SPLATT_PF_IDX, m+1);
-        }
-      }
-      printf("\n\n");
-    }
+    // if(rank == 0) {
+    //   printf("REPLICATING MODES:");
+    //   for(idx_t m=0; m < nmodes; ++m) {
+    //     if(ws->isdense[m]) {
+    //       printf(" %"SPLATT_PF_IDX, m+1);
+    //     }
+    //   }
+    //   printf("\n\n");
+    // }
   }
 
   /* load-balanced partition each mode for threads */
@@ -793,12 +815,12 @@ void splatt_tc_rrals(
   train = tt_filter;
 #endif
 
-  if(rank == 0) {
-    printf("\n");
-  }
+  // if(rank == 0) {
+  //   printf("\n");
+  // }
 
   sample_seeds = splatt_malloc(
-      splatt_omp_get_num_threads() * SEED_PADDING * sizeof(*sample_seeds));
+      splatt_omp_get_max_threads() * SEED_PADDING * sizeof(*sample_seeds));
 
   #pragma omp parallel
   {
@@ -816,6 +838,20 @@ void splatt_tc_rrals(
   sp_timer_t mode_timer;
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
+
+
+
+  int **act = (int **)malloc(nmodes*sizeof(int *));
+  for(int i=0; i<nmodes; i++){
+    act[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  }
+
+  int **frac = (int **)malloc(nmodes*sizeof(int *));
+  for(int i=0; i<nmodes; i++){
+    frac[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  }
+
+
 
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     #pragma omp parallel
@@ -838,7 +874,7 @@ void splatt_tc_rrals(
            */
           #pragma omp for schedule(dynamic, 8) nowait
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
-            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid);
+            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac);
           }
         }
 
@@ -852,8 +888,16 @@ void splatt_tc_rrals(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
-            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-                mode_timer.seconds);
+            long long int tot_act = 0;
+            long long int tot_frac = 0;
+            for(int i=0; i<scoo->dims[m]; i++){
+              tot_act += act[m][i];
+              tot_frac += frac[m][i];
+            }
+            
+            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+                // mode_timer.seconds);
           }
         }
         #pragma omp barrier
