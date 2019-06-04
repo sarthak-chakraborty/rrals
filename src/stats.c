@@ -27,19 +27,21 @@ static void p_stats_basic(
   sptensor_t const * const tt,
   char const * const ifname)
 {
-  printf("Tensor information ---------------------------------------------\n");
-  printf("FILE=%s\n", ifname);
-  printf("DIMS=%"SPLATT_PF_IDX, tt->dims[0]);
-  for(idx_t m=1; m < tt->nmodes; ++m) {
-    printf("x%"SPLATT_PF_IDX, tt->dims[m]);
-  }
-  printf(" NNZ=%"SPLATT_PF_IDX, tt->nnz);
-  printf(" DENSITY=%e\n" , tt_density(tt));
+  // printf("Tensor information ---------------------------------------------\n");
+  // printf("FILE=%s\n", ifname);
+  // printf("DIMS=%"SPLATT_PF_IDX, tt->dims[0]);
+  // for(idx_t m=1; m < tt->nmodes; ++m) {
+  //   printf("x%"SPLATT_PF_IDX, tt->dims[m]);
+  // }
+  // printf(" NNZ=%"SPLATT_PF_IDX, tt->nnz);
+  // printf(" DENSITY=%e\n" , tt_density(tt));
 
-  char * bytestr = bytes_str(tt->nnz * ((sizeof(idx_t) * tt->nmodes) + sizeof(val_t)));
-  printf("COORD-STORAGE=%s\n", bytestr);
-  printf("\n");
-  free(bytestr);
+  // char * bytestr = bytes_str(tt->nnz * ((sizeof(idx_t) * tt->nmodes) + sizeof(val_t)));
+  // printf("COORD-STORAGE=%s\n", bytestr);
+  // printf("\n");
+  // free(bytestr);
+
+
 }
 
 

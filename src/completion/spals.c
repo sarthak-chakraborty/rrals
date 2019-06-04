@@ -1017,6 +1017,25 @@ void splatt_tc_spals(
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
+
+
+  // int **act = (int **)malloc(nmodes*sizeof(int *));
+  // for(int i=0; i<nmodes; i++){
+  //   act[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  // }
+
+  // int **frac = (int **)malloc(nmodes*sizeof(int *));
+  // for(int i=0; i<nmodes; i++){
+  //   frac[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  // }
+
+  // double **time_slice = (double **)malloc(nmodes*sizeof(double *));
+  // for(int i=0; i<nmodes; i++){
+  //   time_slice[i] = (double *)malloc((scoo->dims[i])*sizeof(double));
+  // }
+
+
+
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     #pragma omp parallel
     {

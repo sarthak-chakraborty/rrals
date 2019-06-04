@@ -9,6 +9,8 @@
 
 #include <math.h>
 #include <omp.h>
+#include <time.h>
+#include <sys/time.h>
 
 /* TODO: Conditionally include this OR define lapack prototypes below?
  *       What does this offer beyond prototypes? Can we detect at compile time
@@ -843,6 +845,10 @@ void splatt_tc_rrals(
 
 
 
+  FILE *f_act = fopen("Actual.csv", "w");
+  FILE *f_frac = fopen("Fraction.csv", "w");
+  FILE *f_time = fopen("Time.csv", "w");
+
   int **act = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
     act[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
@@ -853,6 +859,10 @@ void splatt_tc_rrals(
     frac[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
   }
 
+  double **time_slice = (double **)malloc(nmodes*sizeof(double *));
+  for(int i=0; i<nmodes; i++){
+    time_slice[i] = (double *)malloc((scoo->dims[i])*sizeof(double));
+  }
 
 
   for(idx_t e=1; e < ws->max_its+1; ++e) {
@@ -863,6 +873,7 @@ void splatt_tc_rrals(
       for(idx_t m=0; m < nmodes; ++m) {
         #pragma omp master
         timer_fstart(&mode_timer);
+
 
         if(ws->isdense[m]) {
           /* XXX */
@@ -876,7 +887,15 @@ void splatt_tc_rrals(
            */
           #pragma omp for schedule(dynamic, 8) nowait
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
+            struct timeval start_t, stop_t;
+            time_t start, stop;
+            gettimeofday(&start_t, NULL);
+            start = clock();
             p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac);
+            stop = clock();
+            gettimeofday(&stop_t, NULL);
+            // time_slice[m][i] = (double)(stop - start)/(double)CLOCKS_PER_SEC;
+            time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
         }
 
@@ -892,12 +911,23 @@ void splatt_tc_rrals(
           if(rank == 0) {
             long long int tot_act = 0;
             long long int tot_frac = 0;
+            double tot_time = 0.0;
             for(int i=0; i<scoo->dims[m]; i++){
               tot_act += act[m][i];
               tot_frac += frac[m][i];
+              tot_time += time_slice[m][i];
+
+              fprintf(f_frac, "%d,", frac[m][i]);
+              fprintf(f_act, "%d,", act[m][i]);
+              fprintf(f_time, "%lf,", time_slice[m][i]);
             }
+
+            fprintf(f_frac, "\n");
+            fprintf(f_act, "\n");
+            fprintf(f_time, "\n");
             
-            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            // printf("  time: %lf\n", tot_time);
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
                 // mode_timer.seconds);
           }
