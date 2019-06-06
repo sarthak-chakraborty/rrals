@@ -275,9 +275,7 @@ static void p_process_slice(
     val_t * const neqs_buf_tree,
     idx_t * const nflush,
     int alpha,
-    int beta,
-    int **act,
-    int **frac)
+    int beta)
 {
   idx_t const nmodes = scoo->nmodes;
   val_t const * const restrict vals = scoo->coo->vals;
@@ -335,8 +333,8 @@ static void p_process_slice(
   }
 
   /* store diagnostics */
-  act[mode][slice_id] = slice_size;
-  frac[mode][slice_id] = slice_end - slice_start;
+  // act[mode][slice_id] = slice_size;
+  // frac[mode][slice_id] = slice_end - slice_start;
 
   /* foreach nnz in slice */
   for(idx_t x = slice_start; x < slice_end; ++x) {
@@ -411,9 +409,7 @@ static void p_update_slice(
     tc_ws * const ws,
     int const tid,
     int alpha,
-    int beta,
-    int **act,
-    int **frac)
+    int beta)
 {
   idx_t const nmodes = scoo->nmodes;
   idx_t const nfactors = model->rank;
@@ -458,7 +454,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(scoo, slice_id, mode, mats, nfactors, out_row, accum, neqs,
-      mat_accum, hada_accum, &nflush, alpha, beta, act, frac);
+      mat_accum, hada_accum, &nflush, alpha, beta);
 
   /* add regularization to the diagonal */
   for(idx_t f=0; f < nfactors; ++f) {
@@ -845,24 +841,24 @@ void splatt_tc_rrals(
 
 
 
-  FILE *f_act = fopen("Actual.csv", "w");
-  FILE *f_frac = fopen("Fraction.csv", "w");
-  FILE *f_time = fopen("Time.csv", "w");
+  // FILE *f_act = fopen("Actual_1.csv", "w");
+  // FILE *f_frac = fopen("Fraction_1.csv", "w");
+  // FILE *f_time = fopen("Time_1.csv", "w");
 
-  int **act = (int **)malloc(nmodes*sizeof(int *));
-  for(int i=0; i<nmodes; i++){
-    act[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
-  }
+  // int **act = (int **)malloc(nmodes*sizeof(int *));
+  // for(int i=0; i<nmodes; i++){
+  //   act[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  // }
 
-  int **frac = (int **)malloc(nmodes*sizeof(int *));
-  for(int i=0; i<nmodes; i++){
-    frac[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
-  }
+  // int **frac = (int **)malloc(nmodes*sizeof(int *));
+  // for(int i=0; i<nmodes; i++){
+  //   frac[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  // }
 
-  double **time_slice = (double **)malloc(nmodes*sizeof(double *));
-  for(int i=0; i<nmodes; i++){
-    time_slice[i] = (double *)malloc((scoo->dims[i])*sizeof(double));
-  }
+  // double **time_slice = (double **)malloc(nmodes*sizeof(double *));
+  // for(int i=0; i<nmodes; i++){
+  //   time_slice[i] = (double *)malloc((scoo->dims[i])*sizeof(double));
+  // }
 
 
   for(idx_t e=1; e < ws->max_its+1; ++e) {
@@ -887,15 +883,15 @@ void splatt_tc_rrals(
            */
           #pragma omp for schedule(dynamic, 8) nowait
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
-            struct timeval start_t, stop_t;
-            time_t start, stop;
-            gettimeofday(&start_t, NULL);
-            start = clock();
-            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac);
-            stop = clock();
-            gettimeofday(&stop_t, NULL);
-            // time_slice[m][i] = (double)(stop - start)/(double)CLOCKS_PER_SEC;
-            time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
+            // struct timeval start_t, stop_t;
+            // time_t start, stop;
+            // gettimeofday(&start_t, NULL);
+            // start = clock();
+            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, alpha, beta);
+            // stop = clock();
+            // gettimeofday(&stop_t, NULL);
+            // // time_slice[m][i] = (double)(stop - start)/(double)CLOCKS_PER_SEC;
+            // time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
         }
 
@@ -909,22 +905,22 @@ void splatt_tc_rrals(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
-            long long int tot_act = 0;
-            long long int tot_frac = 0;
-            double tot_time = 0.0;
-            for(int i=0; i<scoo->dims[m]; i++){
-              tot_act += act[m][i];
-              tot_frac += frac[m][i];
-              tot_time += time_slice[m][i];
+            // long long int tot_act = 0;
+            // long long int tot_frac = 0;
+            // double tot_time = 0.0;
+            // for(int i=0; i<scoo->dims[m]; i++){
+            //   tot_act += act[m][i];
+            //   tot_frac += frac[m][i];
+            //   tot_time += time_slice[m][i];
 
-              fprintf(f_frac, "%d,", frac[m][i]);
-              fprintf(f_act, "%d,", act[m][i]);
-              fprintf(f_time, "%lf,", time_slice[m][i]);
-            }
+            //   fprintf(f_frac, "%d,", frac[m][i]);
+            //   fprintf(f_act, "%d,", act[m][i]);
+            //   fprintf(f_time, "%lf,", time_slice[m][i]);
+            // }
 
-            fprintf(f_frac, "\n");
-            fprintf(f_act, "\n");
-            fprintf(f_time, "\n");
+            // fprintf(f_frac, "\n");
+            // fprintf(f_act, "\n");
+            // fprintf(f_time, "\n");
             
             // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // printf("  time: %lf\n", tot_time);
