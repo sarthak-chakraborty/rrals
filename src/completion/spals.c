@@ -261,6 +261,8 @@ static void p_process_tile(
     int beta,
     int **act,
     int **frac,
+    int **act_dense,
+    int **frac_dense,
     int mode)
 {
   csf_sparsity const * const pt = csf->pt + tile;
@@ -291,6 +293,9 @@ static void p_process_tile(
 
   /* update each slice */
   idx_t const nslices = pt->nfibs[0];
+  printf("%d, %d\n",nslices, tile);
+
+
   for(idx_t i=0; i < nslices; ++i) {
     /* fid is the row we are actually updating */
     idx_t const fid = (pt->fids[0] == NULL) ? i : pt->fids[0][i];
@@ -307,7 +312,7 @@ static void p_process_tile(
 
     /* process each fiber */
     p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush, alpha, beta, act, frac, mode);
+        mat_accum, hada_accum, &nflush, alpha, beta, act_dense, frac_dense, tile);
   } /* foreach slice */
 }
 
@@ -726,10 +731,32 @@ static void p_densemode_als_update(
 
   #pragma omp barrier
 
+
+  int **act_dense = (int **)malloc(csf[m].ntiles*sizeof(int *));
+  int **frac_dense = (int **)malloc(csf[m].ntiles*sizeof(int *));
+
+  for(int tile=0; tile < csf[m].ntiles; ++tile){
+    act_dense[tile] = (int *)malloc(model->dims[m]*sizeof(int));
+    frac_dense[tile] = (int *)malloc(model->dims[m]*sizeof(int));
+
+    for(int i=0; i<model->dims[m]; i++){
+      act_dense[tile][i] = 0;
+      frac_dense[tile][i] = 0;
+    }
+  }
+
+
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
-    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, alpha, beta, act, frac, mode);
+    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, alpha, beta, act, frac, act_dense, frac_dense, mode);
+  }
+
+  for(int tile=0; tile < csf[m].ntiles; tile++){
+    for(int i=0; i<model->dims[m]; i++){
+      act[mode][i] += act_dense[tile][i];
+      frac[mode][i] += frac_dense[tile][i];
+    }
   }
 
   /* aggregate partial products */
@@ -1076,7 +1103,10 @@ void splatt_tc_spals(
         timer_fstart(&mode_timer);
 
         if(ws->isdense[m]) {
+          struct timeval start_t, stop_t;
+          gettimeofday(&start_t, NULL);
           p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid, alpha, beta, act, frac, m);
+          gettimeofday(&stop_t, NULL);
 
         /* dense modes are easy */
         } else {
@@ -1112,7 +1142,7 @@ void splatt_tc_spals(
 
             printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             printf("  time: %lf\n", tot_time);
-            
+
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
             //     mode_timer.seconds);
           }
