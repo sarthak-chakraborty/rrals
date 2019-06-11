@@ -892,13 +892,9 @@ void splatt_tc_rrals(
           #pragma omp for schedule(dynamic, 8) nowait
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
             struct timeval start_t, stop_t;
-            time_t start, stop;
             gettimeofday(&start_t, NULL);
-            start = clock();
             p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac);
-            stop = clock();
             gettimeofday(&stop_t, NULL);
-            // time_slice[m][i] = (double)(stop - start)/(double)CLOCKS_PER_SEC;
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
         }

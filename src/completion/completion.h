@@ -175,7 +175,9 @@ void splatt_tc_spals(
     sptensor_t * train,
     sptensor_t * const validate,
     tc_model * const model,
-    tc_ws * const ws);
+    tc_ws * const ws,
+    int alpha,
+    int beta);
 
 void splatt_tc_rrals(
     sptensor_t * train,

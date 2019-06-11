@@ -456,7 +456,7 @@ int splatt_tc_cmd(
     splatt_tc_als(train, validate, model, ws);
     break;
   case SPLATT_TC_SPALS:
-    splatt_tc_spals(train, validate, model, ws);
+    splatt_tc_spals(train, validate, model, ws, alpha, beta);
     break;
   case SPLATT_TC_RRALS:
     splatt_tc_rrals(train, validate, model, ws, alpha, beta);

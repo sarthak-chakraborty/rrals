@@ -241,7 +241,12 @@ static void p_process_slice(
     val_t * const restrict neqs,
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
-    idx_t * const nflush);
+    idx_t * const nflush,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac,
+    int mode);
 
 
 
@@ -251,7 +256,12 @@ static void p_process_tile(
     tc_model * const model,
     tc_ws * const ws,
     thd_info * const thd_densefactors,
-    int const tid)
+    int const tid,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac,
+    int mode)
 {
   csf_sparsity const * const pt = csf->pt + tile;
   /* empty tile */
@@ -297,7 +307,7 @@ static void p_process_tile(
 
     /* process each fiber */
     p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush);
+        mat_accum, hada_accum, &nflush, alpha, beta, act, frac, mode);
   } /* foreach slice */
 }
 
@@ -410,7 +420,12 @@ static void p_process_slice(
     val_t * const restrict neqs,
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
-    idx_t * const nflush)
+    idx_t * const nflush,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac,
+    int mode)
 {
   idx_t const sample_threshold = 4 * nfactors;
   idx_t const sample_rate = 100;
@@ -589,7 +604,12 @@ static void p_update_slice(
     val_t const reg,
     tc_model * const model,
     tc_ws * const ws,
-    int const tid)
+    int const tid,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac,
+    int mode)
 {
   idx_t const nmodes = csf->nmodes;
   idx_t const nfactors = model->rank;
@@ -636,7 +656,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(csf, 0, i, mats, nfactors, out_row, accum, neqs, mat_accum,
-      hada_accum, &nflush);
+      hada_accum, &nflush, alpha, beta, act, frac, mode);
 
   /* add regularization to the diagonal */
   for(idx_t f=0; f < nfactors; ++f) {
@@ -666,7 +686,12 @@ static void p_densemode_als_update(
     tc_model * const model,
     tc_ws * const ws,
     thd_info * const thd_densefactors,
-    int const tid)
+    int const tid,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac,
+    int mode)
 {
   idx_t const rank = model->rank;
 
@@ -694,7 +719,7 @@ static void p_densemode_als_update(
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
-    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid);
+    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, alpha, beta, act, frac, mode);
   }
 
   /* aggregate partial products */
@@ -859,7 +884,9 @@ void splatt_tc_spals(
     sptensor_t * train,
     sptensor_t * const validate,
     tc_model * const model,
-    tc_ws * const ws)
+    tc_ws * const ws,
+    int alpha,
+    int beta)
 {
   idx_t const nmodes = train->nmodes;
   idx_t const nfactors = model->rank;
@@ -871,10 +898,10 @@ void splatt_tc_spals(
   int const rank = 0;
 #endif
 
-  if(rank == 0) {
-    printf("BUFSIZE=%d\n", ALS_BUFSIZE);
-    printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
-  }
+  // if(rank == 0) {
+  //   printf("BUFSIZE=%d\n", ALS_BUFSIZE);
+  //   printf("USE_3MODE_OPT=%d\n", USE_3MODE_OPT);
+  // }
 
   /* store dense modes redundantly among threads */
   thd_info * thd_densefactors = NULL;
@@ -885,15 +912,15 @@ void splatt_tc_spals(
         ws->maxdense_dim * sizeof(int)); /* nflush */
 
 
-    if(rank == 0) {
-      printf("REPLICATING MODES:");
-      for(idx_t m=0; m < nmodes; ++m) {
-        if(ws->isdense[m]) {
-          printf(" %"SPLATT_PF_IDX, m+1);
-        }
-      }
-      printf("\n\n");
-    }
+    // if(rank == 0) {
+    //   printf("REPLICATING MODES:");
+    //   for(idx_t m=0; m < nmodes; ++m) {
+    //     if(ws->isdense[m]) {
+    //       printf(" %"SPLATT_PF_IDX, m+1);
+    //     }
+    //   }
+    //   printf("\n\n");
+    // }
   }
 
   /* load-balanced partition each mode for threads */
@@ -1011,6 +1038,24 @@ void splatt_tc_spals(
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
+
+
+  int **act = (int **)malloc(nmodes*sizeof(int *));
+  for(int i=0; i<nmodes; i++){
+    act[i] = (int *)malloc((model->dims[i])*sizeof(int));
+  }
+
+  int **frac = (int **)malloc(nmodes*sizeof(int *));
+  for(int i=0; i<nmodes; i++){
+    frac[i] = (int *)malloc((model->dims[i])*sizeof(int));
+  }
+
+  double **time_slice = (double **)malloc(nmodes*sizeof(double *));
+  for(int i=0; i<nmodes; i++){
+    time_slice[i] = (double *)malloc((model->dims[i])*sizeof(double));
+  }
+
+
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     #pragma omp parallel
     {
@@ -1021,13 +1066,17 @@ void splatt_tc_spals(
         timer_fstart(&mode_timer);
 
         if(ws->isdense[m]) {
-          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid);
+          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid, alpha, beta, act, frac, m);
 
         /* dense modes are easy */
         } else {
           /* update each row in parallel */
           for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid);
+            struct timeval start_t, stop_t;
+            gettimeofday(&start_t, NULL);
+            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac, m);
+            gettimeofday(&stop_t, NULL);
+            time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
         }
 
@@ -1041,8 +1090,8 @@ void splatt_tc_spals(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
-            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-                mode_timer.seconds);
+            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+            //     mode_timer.seconds);
           }
         }
         #pragma omp barrier
