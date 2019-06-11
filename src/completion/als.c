@@ -970,10 +970,10 @@ void splatt_tc_als(
         #pragma omp master
         {
           timer_stop(&mode_timer);
-          // if(rank == 0) {
-          //   printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-          //       mode_timer.seconds);
-          // }
+          if(rank == 0) {
+            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+            //     mode_timer.seconds);
+          }
         }
         #pragma omp barrier
       } /* foreach mode */
