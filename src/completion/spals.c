@@ -479,6 +479,10 @@ static void p_process_slice(
   /* strictly, this permutation array should be of size equal to end-start for each iter */
   int const tid = splatt_omp_get_thread_num();
   idx_t * perm_i = NULL;
+
+  int tot_nnz = 0;
+  int sampled_nnz = 0;
+
   while(idxstack[1] < fp[0][i+1]) {
 
     /* move down to nnz node while forming hada */
@@ -522,6 +526,9 @@ static void p_process_slice(
       sample = 0;
       iter_end = end;
     }
+
+    tot_nnz += ntotal;
+    sampled_nnz += iter_end - start;
 
     for(idx_t jj=start; jj < iter_end; ++jj) {
       val_t v;
@@ -574,6 +581,9 @@ static void p_process_slice(
   for(idx_t f=0; f < nfactors; ++f) {
     out_row[f] += accum[f + nfactors];
   }
+
+  act[mode][i] = tot_nnz;
+  frac[mode][i] = sampled_nnz;
 
   /* final flush */
   p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
@@ -1090,6 +1100,19 @@ void splatt_tc_spals(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
+            long long int tot_act = 0;
+            long long int tot_frac = 0;
+            double tot_time = 0.0;
+            for(int i=0; i<model->dims[m]; i++){
+              tot_act += act[m][i];
+              tot_frac += frac[m][i];
+              tot_time += time_slice[m][i];
+
+            }
+
+            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            printf("  time: %lf\n", tot_time);
+            
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
             //     mode_timer.seconds);
           }
