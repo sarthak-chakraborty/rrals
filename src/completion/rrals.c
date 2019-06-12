@@ -928,8 +928,8 @@ void splatt_tc_rrals(
             
             // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // printf("  time: %lf\n", tot_time);
-            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-                mode_timer.seconds);
+            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+            //     mode_timer.seconds);
           }
         }
         #pragma omp barrier

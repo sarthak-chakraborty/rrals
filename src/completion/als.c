@@ -8,6 +8,8 @@
 
 #include <math.h>
 #include <omp.h>
+#include <time.h>
+#include <sys/time.h>
 
 /* TODO: Conditionally include this OR define lapack prototypes below?
  *       What does this offer beyond prototypes? Can we detect at compile time
@@ -240,7 +242,8 @@ static void p_process_slice(
     val_t * const restrict neqs,
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
-    idx_t * const nflush);
+    idx_t * const nflush,
+    double *mttkrp_time);
 
 
 
@@ -250,7 +253,8 @@ static void p_process_tile(
     tc_model * const model,
     tc_ws * const ws,
     thd_info * const thd_densefactors,
-    int const tid)
+    int const tid,
+    double *mttkrp_time)
 {
   csf_sparsity const * const pt = csf->pt + tile;
   /* empty tile */
@@ -296,7 +300,7 @@ static void p_process_tile(
 
     /* process each fiber */
     p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush);
+        mat_accum, hada_accum, &nflush, mttkrp_time);
   } /* foreach slice */
 }
 
@@ -390,7 +394,8 @@ static void p_process_slice(
     val_t * const restrict neqs,
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
-    idx_t * const nflush)
+    idx_t * const nflush,
+    double *mttkrp_time)
 {
   idx_t const nmodes = csf->nmodes;
   csf_sparsity const * const pt = csf->pt + tile;
@@ -434,8 +439,10 @@ static void p_process_slice(
     accum[f + nfactors] = 0;
   }
 
+  struct timeval start_t, stop_t;
   /* process each subtree */
   idx_t depth = 0;
+  gettimeofday(&start_t, NULL);
   while(idxstack[1] < fp[0][i+1]) {
 
     /* move down to nnz node while forming hada */
@@ -494,6 +501,8 @@ static void p_process_slice(
       --depth;
     } while(depth > 0 && idxstack[depth+1] == fp[depth][idxstack[depth]+1]);
   } /* foreach fiber subtree */
+    gettimeofday(&stop_t, NULL);
+    *mttkrp_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
 
   /* accumulate into output row */
   for(idx_t f=0; f < nfactors; ++f) {
@@ -529,7 +538,9 @@ static void p_update_slice(
     val_t const reg,
     tc_model * const model,
     tc_ws * const ws,
-    int const tid)
+    int const tid,
+    double *solving_time,
+    double *mttkrp_time)
 {
   idx_t const nmodes = csf->nmodes;
   idx_t const nfactors = model->rank;
@@ -576,8 +587,10 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(csf, 0, i, mats, nfactors, out_row, accum, neqs, mat_accum,
-      hada_accum, &nflush);
+      hada_accum, &nflush, mttkrp_time);
 
+  struct timeval start, stop;
+  gettimeofday(&start, NULL);
   /* add regularization to the diagonal */
   for(idx_t f=0; f < nfactors; ++f) {
     neqs[f + (f * nfactors)] += reg;
@@ -585,6 +598,8 @@ static void p_update_slice(
 
   /* solve! */
   p_invert_row(neqs, out_row, nfactors);
+  gettimeofday(&stop, NULL);
+  *solving_time += (stop.tv_sec + stop.tv_usec/1000000.0) - (start.tv_sec + start.tv_usec/1000000.0);
 }
 
 
@@ -606,8 +621,13 @@ static void p_densemode_als_update(
     tc_model * const model,
     tc_ws * const ws,
     thd_info * const thd_densefactors,
-    int const tid)
+    int const tid,
+    double *solving_time,
+    double *mttkrp_time)
 {
+
+  struct timeval start, stop;
+
   idx_t const rank = model->rank;
 
   /* master thread writes/aggregates directly to the model */
@@ -634,7 +654,7 @@ static void p_densemode_als_update(
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
-    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid);
+    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, mttkrp_time);
   }
 
   /* aggregate partial products */
@@ -666,6 +686,8 @@ static void p_densemode_als_update(
   val_t const reg = ws->regularization[m];
   #pragma omp for schedule(static, 1)
   for(idx_t i=0; i < dense_slices; ++i) {
+    gettimeofday(&start, NULL);
+
     val_t * const restrict neqs_i =
         (val_t *) thd_densefactors[0].scratch[1] + (i * rank * rank);
     /* add regularization */
@@ -675,6 +697,8 @@ static void p_densemode_als_update(
 
     /* Cholesky + solve */
     p_invert_row(neqs_i, out + (i * rank), rank);
+    gettimeofday(&stop, NULL);
+    *solving_time += (stop.tv_sec + stop.tv_usec/1000000.0) - (start.tv_sec + start.tv_usec/1000000.0);
   }
 }
 
@@ -937,27 +961,39 @@ void splatt_tc_als(
   val_t frobsq = tc_frob_sq(model, ws);
   tc_converge(train, validate, model, loss, frobsq, 0, ws);
 
+
+  double avg_solving_time[3] = {0.0, 0.0, 0.0};
+  double avg_mttkrp_time[3] = {0.0, 0.0, 0.0};
+  double avg_tot_time[3] = {0.0, 0.0, 0.0};
+  int count=0;
+
+
   sp_timer_t mode_timer;
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
+
   for(idx_t e=1; e < ws->max_its+1; ++e) {
+    count++;
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
 
       for(idx_t m=0; m < nmodes; ++m) {
+        double solving_time = 0.0;
+        double mttkrp_time = 0.0;
+
         #pragma omp master
         timer_fstart(&mode_timer);
 
         if(ws->isdense[m]) {
-          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid);
+          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid, &solving_time, &mttkrp_time);
 
         /* dense modes are easy */
         } else {
           /* update each row in parallel */
           for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid);
+            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, &solving_time, &mttkrp_time);
           }
         }
 
@@ -971,8 +1007,15 @@ void splatt_tc_als(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
+            avg_tot_time[m] += (double)mode_timer.seconds;
+            avg_mttkrp_time[m] += mttkrp_time;
+            avg_solving_time[m] += solving_time;
+             
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
             //     mode_timer.seconds);
+            // printf("Solving Time: %lf\n",solving_time);
+            // printf("MTTKRP Time: %lf\n", mttkrp_time);
+            // printf("\n");
           }
         }
         #pragma omp barrier
@@ -987,6 +1030,14 @@ void splatt_tc_als(
     }
 
   } /* foreach iteration */
+
+  // for(int i=0; i<nmodes; i++){
+  //   printf("MODE: %d\n-----------\n", i);
+  //   printf("  Total Time: %lf\n", (avg_tot_time[i]/count));
+  //   printf("  MTTKRP Time: %lf\n", (avg_mttkrp_time[i]/count));
+  //   printf("  Solving Time: %lf\n",(avg_solving_time[i]/count));
+  //   printf("\n");
+  // }
 
 #ifdef SPLATT_USE_MPI
   /* UNDO TERRIBLE HACK */

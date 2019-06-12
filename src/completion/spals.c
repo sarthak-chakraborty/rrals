@@ -246,7 +246,9 @@ static void p_process_slice(
     int beta,
     int **act,
     int **frac,
-    int mode);
+    int mode,
+    double *sampling_time,
+    double *mttkrp_time);
 
 
 
@@ -263,7 +265,9 @@ static void p_process_tile(
     int **frac,
     int **act_dense,
     int **frac_dense,
-    int mode)
+    int mode,
+    double *sampling_time,
+    double *mttkrp_time)
 {
   csf_sparsity const * const pt = csf->pt + tile;
   /* empty tile */
@@ -293,7 +297,7 @@ static void p_process_tile(
 
   /* update each slice */
   idx_t const nslices = pt->nfibs[0];
-  printf("%d, %d\n",nslices, tile);
+  // printf("%d, %d\n",nslices, tile);
 
 
   for(idx_t i=0; i < nslices; ++i) {
@@ -312,7 +316,7 @@ static void p_process_tile(
 
     /* process each fiber */
     p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush, alpha, beta, act_dense, frac_dense, tile);
+        mat_accum, hada_accum, &nflush, alpha, beta, act_dense, frac_dense, tile, sampling_time, mttkrp_time);
   } /* foreach slice */
 }
 
@@ -430,16 +434,28 @@ static void p_process_slice(
     int beta,
     int **act,
     int **frac,
-    int mode)
+    int mode,
+    double *sampling_time,
+    double *mttkrp_time)
 {
-  idx_t const sample_threshold = 4 * nfactors;
-  idx_t const sample_rate = 100;
+
+  // idx_t sample_threshold;
+  // if(mode == 0)
+  //   sample_threshold = 4 * nfactors;
+  // else if(mode == 1)
+  //   sample_threshold = 0.5 * nfactors;
+  // else if(mode == 2)
+  //   sample_threshold = 0.01 * nfactors;
+
+  idx_t const sample_threshold = alpha * nfactors;
+  idx_t const sample_rate = beta;
   idx_t const nmodes = csf->nmodes;
   csf_sparsity const * const pt = csf->pt + tile;
   val_t const * const restrict vals = pt->vals;
   if(vals == NULL) {
     return;
   }
+
 
 #if USE_3MODE_OPT
   if(nmodes == 3) {
@@ -488,6 +504,9 @@ static void p_process_slice(
   int tot_nnz = 0;
   int sampled_nnz = 0;
 
+  struct timeval start_t, start_tt, stop_t, stop_tt;
+
+  gettimeofday(&start_tt, NULL);
   while(idxstack[1] < fp[0][i+1]) {
 
     /* move down to nnz node while forming hada */
@@ -505,6 +524,7 @@ static void p_process_slice(
     val_t * const restrict accum_nnz = accum + ((depth+1) * nfactors);
 
     /* process all nonzeros [start, end) */
+    gettimeofday(&start_t, NULL);
     idx_t const start = fp[depth][idxstack[depth]];
     idx_t const end   = fp[depth][idxstack[depth]+1];
 
@@ -531,6 +551,8 @@ static void p_process_slice(
       sample = 0;
       iter_end = end;
     }
+    gettimeofday(&stop_t, NULL);
+    *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0); 
 
     tot_nnz += ntotal;
     sampled_nnz += iter_end - start;
@@ -581,6 +603,8 @@ static void p_process_slice(
       --depth;
     } while(depth > 0 && idxstack[depth+1] == fp[depth][idxstack[depth]+1]);
   } /* foreach fiber subtree */
+    gettimeofday(&stop_tt, NULL);
+    *mttkrp_time += (stop_tt.tv_sec + stop_tt.tv_usec/1000000.0)- (start_tt.tv_sec + start_tt.tv_usec/1000000.0); 
 
   /* accumulate into output row */
   for(idx_t f=0; f < nfactors; ++f) {
@@ -624,8 +648,14 @@ static void p_update_slice(
     int beta,
     int **act,
     int **frac,
-    int mode)
+    int mode,
+    double *solving_time,
+    double *sampling_time,
+    double *mttkrp_time)
 {
+  struct timeval start, stop;
+  double time_diff;
+
   idx_t const nmodes = csf->nmodes;
   idx_t const nfactors = model->rank;
   csf_sparsity const * const pt = csf->pt + tile;
@@ -671,15 +701,19 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(csf, 0, i, mats, nfactors, out_row, accum, neqs, mat_accum,
-      hada_accum, &nflush, alpha, beta, act, frac, mode);
+      hada_accum, &nflush, alpha, beta, act, frac, mode, sampling_time, mttkrp_time);
+
 
   /* add regularization to the diagonal */
+  gettimeofday(&start, NULL);
   for(idx_t f=0; f < nfactors; ++f) {
     neqs[f + (f * nfactors)] += reg;
   }
 
   /* solve! */
   p_invert_row(neqs, out_row, nfactors);
+  gettimeofday(&stop, NULL);
+  *solving_time += (stop.tv_sec + stop.tv_usec/1000000.0) - (start.tv_sec + start.tv_usec/1000000.0);
 }
 
 
@@ -706,8 +740,14 @@ static void p_densemode_als_update(
     int beta,
     int **act,
     int **frac,
-    int mode)
+    int mode,
+    double *solving_time,
+    double *sampling_time,
+    double *mttkrp_time)
 {
+
+  struct timeval start, stop;
+
   idx_t const rank = model->rank;
 
   /* master thread writes/aggregates directly to the model */
@@ -749,7 +789,7 @@ static void p_densemode_als_update(
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
-    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, alpha, beta, act, frac, act_dense, frac_dense, mode);
+    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, alpha, beta, act, frac, act_dense, frac_dense, mode, sampling_time, mttkrp_time);
   }
 
   for(int tile=0; tile < csf[m].ntiles; tile++){
@@ -786,8 +826,10 @@ static void p_densemode_als_update(
   val_t * const restrict out  = model->factors[m];
 #endif
   val_t const reg = ws->regularization[m];
+  
   #pragma omp for schedule(static, 1)
   for(idx_t i=0; i < dense_slices; ++i) {
+    gettimeofday(&start, NULL);
     val_t * const restrict neqs_i =
         (val_t *) thd_densefactors[0].scratch[1] + (i * rank * rank);
     /* add regularization */
@@ -797,6 +839,8 @@ static void p_densemode_als_update(
 
     /* Cholesky + solve */
     p_invert_row(neqs_i, out + (i * rank), rank);
+    gettimeofday(&stop, NULL);
+    *solving_time += (stop.tv_sec + stop.tv_usec/1000000.0) - (start.tv_sec + start.tv_usec/1000000.0);
   }
 }
 
@@ -1051,9 +1095,9 @@ void splatt_tc_spals(
   train = tt_filter;
 #endif
 
-  if(rank == 0) {
-    printf("\n");
-  }
+  // if(rank == 0) {
+  //   printf("\n");
+  // }
 
   sample_seeds = splatt_malloc(
       splatt_omp_get_max_threads() * SEED_PADDING * sizeof(*sample_seeds));
@@ -1071,11 +1115,6 @@ void splatt_tc_spals(
   val_t frobsq = tc_frob_sq(model, ws);
   tc_converge(train, validate, model, loss, frobsq, 0, ws);
 
-  sp_timer_t mode_timer;
-  timer_reset(&mode_timer);
-  timer_start(&ws->tc_time);
-
-
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
@@ -1092,21 +1131,39 @@ void splatt_tc_spals(
     time_slice[i] = (double *)malloc((model->dims[i])*sizeof(double));
   }
 
+  double avg_sampling_time[3] = {0.0, 0.0, 0.0};
+  double avg_solving_time[3] = {0.0, 0.0, 0.0};
+  double avg_mttkrp_time[3] = {0.0, 0.0, 0.0};
+  double avg_tot_time[3] = {0.0, 0.0, 0.0};
+  int count = 0;
+
+
+  sp_timer_t mode_timer;
+  timer_reset(&mode_timer);
+  timer_start(&ws->tc_time);
+
 
   for(idx_t e=1; e < ws->max_its+1; ++e) {
+    count++;
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
 
       for(idx_t m=0; m < nmodes; ++m) {
+        double solving_time = 0.0;
+        double sampling_time = 0.0;
+        double mttkrp_time = 0.0;
+        double tottime_mode3;
+
         #pragma omp master
         timer_fstart(&mode_timer);
 
         if(ws->isdense[m]) {
           struct timeval start_t, stop_t;
           gettimeofday(&start_t, NULL);
-          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid, alpha, beta, act, frac, m);
+          p_densemode_als_update(csf, m, model, ws, thd_densefactors, tid, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time);
           gettimeofday(&stop_t, NULL);
+          tottime_mode3 = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
 
         /* dense modes are easy */
         } else {
@@ -1114,7 +1171,7 @@ void splatt_tc_spals(
           for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac, m);
+            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time);
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
@@ -1140,8 +1197,26 @@ void splatt_tc_spals(
 
             }
 
+            if(m==2)
+              avg_tot_time[m] += tottime_mode3;
+            else
+              avg_tot_time[m] += tot_time;
+
+            avg_sampling_time[m] += sampling_time;
+            avg_mttkrp_time[m] += (mttkrp_time - sampling_time);
+            avg_solving_time[m] += solving_time;
+
+
+
             printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
-            printf("  time: %lf\n", tot_time);
+            // if(m==2)
+            //   printf("  Total time: %lf\n", tottime_mode3);
+            // else
+            //   printf("  Total time: %lf\n", tot_time);
+            // printf("  Solving time: %lf\n", solving_time);
+            // printf("  Sampling Time: %lf\n", sampling_time);
+            // printf("  MTTKRP Time: %lf\n", mttkrp_time);
+            // printf("\n");
 
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
             //     mode_timer.seconds);
@@ -1160,10 +1235,19 @@ void splatt_tc_spals(
 
   } /* foreach iteration */
 
+  // for(int i=0; i<nmodes; i++){
+  //   printf("MODE: %d\n-----------\n", i);
+  //   printf("  Total Time: %lf\n", (avg_tot_time[i]/count));
+  //   printf("  Sampling Time: %lf\n", (avg_sampling_time[i]/count));
+  //   printf("  MTTKRP Time: %lf\n", (avg_mttkrp_time[i]/count));
+  //   printf("  Solving Time: %lf\n",(avg_solving_time[i]/count));
+  //   printf("\n");
+  // }
+
   #pragma omp parallel
   {
     int const tid = splatt_omp_get_thread_num();
-    splatt_free(perm_i_global[tid]);
+    splatt_free(perm_i_global[tid]); 
   }
   splatt_free(sample_seeds);
 
