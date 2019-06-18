@@ -116,7 +116,7 @@ static inline void p_invert_row(
 * @param[out] out The NxN matrix to update.
 */
 static inline void p_vec_oprod(
-		val_t * const restrict A,
+    val_t * const restrict A,
     idx_t const N,
     idx_t const nvecs,
     idx_t const nflush,
@@ -444,7 +444,6 @@ static void p_process_slice(
     double *mttkrptime,
     double *samplingtime)
 {
-  
   struct timeval start_t, start_tt, stop_t, stop_tt;
   // idx_t sample_threshold;
   // if(mode == 0)
@@ -653,6 +652,7 @@ static void p_update_slice(
     tc_model * const model,
     tc_ws * const ws,
     int const tid,
+    val_t ** const lev_score,
     int alpha,
     int beta,
     int **act,
@@ -859,6 +859,62 @@ static void p_densemode_als_update(
     *solving_time += (stop.tv_sec + stop.tv_usec/1000000.0) - (start.tv_sec + start.tv_usec/1000000.0);
   }
 }
+
+
+
+
+static val_t *getGram(val_t *A, idx_t nrows, idx_t rank){
+  val_t *gram = (val_t *)malloc((rank*rank) * sizeof(val_t));
+
+  val_t sum;
+  for(int i=0; i<rank; i++){
+    for(int j=0; j<rank; j++){
+      sum = 0;
+      for(int k=0; k<nrows; k++){
+        sum += A[i + k*rank]*A[j + k*rank];
+      }
+      gram[j + i*rank] = sum;
+    }
+  }
+
+  return gram;
+}
+
+
+
+// extern 'C' {
+//     // LU decomoposition of a general matrix
+//     void dgetrf_(int* M, int *N, double* A, int* lda, int* IPIV, int* INFO);
+
+//     // generate inverse of a matrix given its LU decomposition
+//     void dgetri_(int* N, double* A, int* lda, int* IPIV, double* WORK, int* lwork, int* INFO);
+// }
+
+static void GramInv(val_t *A, idx_t N){
+  int *IPIV = (int *)malloc((N+1) * sizeof(int));
+  int LWORK = N*N;
+  double *WORK = (double *)malloc(LWORK * sizeof(double));
+  int INFO;
+
+  dgetrf_(&N,&N,A,&N,IPIV,&INFO);
+  dgetri_(&N,A,&N,IPIV,WORK,&LWORK,&INFO);
+
+  free(IPIV);
+  free(WORK);
+}
+
+
+
+static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
+  for (int i=0; i<nrows; ++i){
+    for (int j1=0; j1<rank; j1++){
+      for (int j2=0; j2<rank; j2++){
+        lev_score[factor][i] += A[i*rank + j1] * gram[j1*rank + j2] * A[i*rank + j2];
+      }
+    }
+  }
+}
+
 
 
 #ifdef SPLATT_USE_MPI
@@ -1127,6 +1183,8 @@ void splatt_tc_spals(
 
 
 
+
+
   val_t loss = tc_loss_sq(train, model, ws);
   val_t frobsq = tc_frob_sq(model, ws);
   tc_converge(train, validate, model, loss, frobsq, 0, ws);
@@ -1175,8 +1233,21 @@ void splatt_tc_spals(
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
+
+  val_t **lev_score = (val_t **)malloc(nmodes * sizeof(val_t *));
+  for(int i=0; i<nmodes; i++)
+    lev_score[i] = (val_t *)malloc((model->dims[i])*sizeof(val_t));
+
+
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
+
+    for(int i=0; i<nmodes; i++){
+      val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
+      GramInv(gram, model->rank);
+
+      getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
+    }
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
@@ -1203,7 +1274,7 @@ void splatt_tc_spals(
           for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime);
+            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime);
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
