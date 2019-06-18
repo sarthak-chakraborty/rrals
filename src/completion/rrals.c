@@ -318,24 +318,27 @@ static void p_process_slice(
   	Modes[k++] = m;
   }
 
+  printf("%d\n",slice_id);
+
   val_t sum=0.0;
   val_t **S = (val_t **)malloc(scoo->dims[Modes[0]]*sizeof(val_t *));
+
   for(int i=0; i<scoo->dims[Modes[0]]; i++){
   	S[i] = (val_t *)malloc(scoo->dims[Modes[1]]*sizeof(val_t));
 
   	for(int j=0; j<scoo->dims[Modes[1]]; j++){
-  		if(inds[i*scoo->dims[Modes[0]] + j]){
-  			if(flag==0)
-  				S[i][j] = 0;
-  			flag=1;
-  		}
-  		else{
-  			S[i][j] = lev_score[Modes[0]][i] * lev_score[Modes[1]][j];
-  			sum += S[i][j];
-  		}
+  		idx_t a = inds[i*scoo->dims[Modes[0]] + j];
+		if(flag==0)
+			S[i][j] = 0;
+		else{
+			S[i][j] = lev_score[Modes[0]][i] * lev_score[Modes[1]][j];
+			sum += S[i][j];
+		}
+		flag=1;
   	}
   }
 
+  #pragma omp parallel for
   for(int i=0; i<scoo->dims[Modes[0]]; i++){
   	for(int j=0; j<scoo->dims[Modes[1]]; j++){
   		S[i][j] /= sum;
