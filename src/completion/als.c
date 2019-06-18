@@ -397,6 +397,9 @@ static void p_process_slice(
     idx_t * const nflush,
     double *mttkrp_time)
 {
+
+  struct timeval start_t, stop_t;
+
   idx_t const nmodes = csf->nmodes;
   csf_sparsity const * const pt = csf->pt + tile;
   val_t const * const restrict vals = pt->vals;
@@ -420,6 +423,7 @@ static void p_process_slice(
   idx_t bufsize = 0;
   val_t * hada = neqs_buf;
 
+  gettimeofday(&start_t, NULL);
   /* push initial idx initialize idxstack */
   idx_t idxstack[MAX_NMODES];
   idxstack[0] = i;
@@ -439,10 +443,9 @@ static void p_process_slice(
     accum[f + nfactors] = 0;
   }
 
-  struct timeval start_t, stop_t;
   /* process each subtree */
   idx_t depth = 0;
-  gettimeofday(&start_t, NULL);
+  
   while(idxstack[1] < fp[0][i+1]) {
 
     /* move down to nnz node while forming hada */
@@ -501,13 +504,14 @@ static void p_process_slice(
       --depth;
     } while(depth > 0 && idxstack[depth+1] == fp[depth][idxstack[depth]+1]);
   } /* foreach fiber subtree */
-    gettimeofday(&stop_t, NULL);
-    *mttkrp_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
 
   /* accumulate into output row */
   for(idx_t f=0; f < nfactors; ++f) {
     out_row[f] += accum[f + nfactors];
   }
+
+  gettimeofday(&stop_t, NULL);
+    *mttkrp_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
 
   /* final flush */
   p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
@@ -1011,11 +1015,11 @@ void splatt_tc_als(
             avg_mttkrp_time[m] += mttkrp_time;
             avg_solving_time[m] += solving_time;
              
-            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-            //     mode_timer.seconds);
-            // printf("Solving Time: %lf\n",solving_time);
-            // printf("MTTKRP Time: %lf\n", mttkrp_time);
-            // printf("\n");
+            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+                mode_timer.seconds);
+            printf("Solving Time: %lf\n",solving_time);
+            printf("MTTKRP Time: %lf\n", mttkrp_time);
+            printf("\n");
           }
         }
         #pragma omp barrier
@@ -1031,13 +1035,14 @@ void splatt_tc_als(
 
   } /* foreach iteration */
 
-  // for(int i=0; i<nmodes; i++){
-  //   printf("MODE: %d\n-----------\n", i);
-  //   printf("  Total Time: %lf\n", (avg_tot_time[i]/count));
-  //   printf("  MTTKRP Time: %lf\n", (avg_mttkrp_time[i]/count));
-  //   printf("  Solving Time: %lf\n",(avg_solving_time[i]/count));
-  //   printf("\n");
-  // }
+    printf("\n");
+  for(int i=0; i<nmodes; i++){
+    printf("MODE: %d\n-----------\n", i);
+    printf("  Total Time: %lf\n", (avg_tot_time[i]/count));
+    printf("  MTTKRP Time: %lf\n", (avg_mttkrp_time[i]/count));
+    printf("  Solving Time: %lf\n",(avg_solving_time[i]/count));
+    printf("\n");
+  }
 
 #ifdef SPLATT_USE_MPI
   /* UNDO TERRIBLE HACK */

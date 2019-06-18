@@ -25,7 +25,7 @@
  * TODO: This should actually be a function of the number of nonzeros and
  * probably the number of threads/ranks.
  */
-#define DENSEMODE_THRESHOLD 300
+#define DENSEMODE_THRESHOLD 1
 
 /* swap two val_t pointers */
 #define SPLATT_VPTR_SWAP(x,y) \
