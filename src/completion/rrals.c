@@ -11,7 +11,6 @@
 #include <omp.h>
 #include <time.h>
 #include <sys/time.h>
-#include <signal.h>
 
 /* TODO: Conditionally include this OR define lapack prototypes below?
  *       What does this offer beyond prototypes? Can we detect at compile time
@@ -263,14 +262,6 @@ static idx_t * perm_i_global[RRALS_MAX_THREADS];
 static idx_t const SEED_PADDING = 16;
 static unsigned int * sample_seeds = NULL;
 
-
-int flag=1;
-void sig_handler(int sign){
-	if(sign == SIGSEGV)
-		flag=0;
-}
-
-
 static void p_process_slice(
     scoo_t const * const scoo,
     idx_t const slice_id,
@@ -283,7 +274,6 @@ static void p_process_slice(
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
     idx_t * const nflush,
-    val_t ** const lev_score,
     int alpha,
     int beta,
     int **act,
@@ -291,8 +281,6 @@ static void p_process_slice(
     double *sampling_time,
     double *mttkrp_time)
 {
-
-	signal(SIGSEGV, sig_handler);
 
   struct timeval start_t, stop_t, start_tt, stop_tt;
 
@@ -308,42 +296,6 @@ static void p_process_slice(
   idx_t const slice_start = slice_ptr[slice_id];
   idx_t       slice_end   = slice_ptr[slice_id+1];
   idx_t const slice_size = slice_end - slice_start;
-
-
-  idx_t *Modes = (idx_t *)malloc((nmodes-1)*sizeof(idx_t));
-  int k=0;
-  for(int m=0; m<nmodes; m++){
-  	if(mode == m)
-  		continue;
-  	Modes[k++] = m;
-  }
-
-  printf("%d\n",slice_id);
-
-  val_t sum=0.0;
-  val_t **S = (val_t **)malloc(scoo->dims[Modes[0]]*sizeof(val_t *));
-
-  for(int i=0; i<scoo->dims[Modes[0]]; i++){
-  	S[i] = (val_t *)malloc(scoo->dims[Modes[1]]*sizeof(val_t));
-
-  	for(int j=0; j<scoo->dims[Modes[1]]; j++){
-  		idx_t a = inds[i*scoo->dims[Modes[0]] + j];
-		if(flag==0)
-			S[i][j] = 0;
-		else{
-			S[i][j] = lev_score[Modes[0]][i] * lev_score[Modes[1]][j];
-			sum += S[i][j];
-		}
-		flag=1;
-  	}
-  }
-
-  #pragma omp parallel for
-  for(int i=0; i<scoo->dims[Modes[0]]; i++){
-  	for(int j=0; j<scoo->dims[Modes[1]]; j++){
-  		S[i][j] /= sum;
-  	}
-  }
 
 
   for(idx_t f=0; f < nfactors; ++f) {
@@ -474,7 +426,6 @@ static void p_update_slice(
     tc_model * const model,
     tc_ws * const ws,
     int const tid,
-    val_t ** const lev_score,
     int alpha,
     int beta,
     int **act,
@@ -529,7 +480,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(scoo, slice_id, mode, mats, nfactors, out_row, accum, neqs,
-      mat_accum, hada_accum, &nflush, lev_score, alpha, beta, act, frac, sampling_time, mttkrp_time);
+      mat_accum, hada_accum, &nflush, alpha, beta, act, frac, sampling_time, mttkrp_time);
 
   gettimeofday(&start, NULL);
   /* add regularization to the diagonal */
@@ -636,66 +587,6 @@ static void p_densemode_als_update(
     p_invert_row(neqs_i, out + (i * rank), rank);
   }
 }
-
-
-
-
-
-static val_t *getGram(val_t *A, idx_t nrows, idx_t rank){
-  val_t *gram = (val_t *)malloc((rank*rank) * sizeof(val_t));
-
-  val_t sum;
-  for(int i=0; i<rank; i++){
-    for(int j=0; j<rank; j++){
-      sum = 0;
-      for(int k=0; k<nrows; k++){
-        sum += A[i + k*rank]*A[j + k*rank];
-      }
-      gram[j + i*rank] = sum;
-    }
-  }
-
-  return gram;
-}
-
-
-
-// extern 'C' {
-//     // LU decomoposition of a general matrix
-//     void dgetrf_(int* M, int *N, double* A, int* lda, int* IPIV, int* INFO);
-
-//     // generate inverse of a matrix given its LU decomposition
-//     void dgetri_(int* N, double* A, int* lda, int* IPIV, double* WORK, int* lwork, int* INFO);
-// }
-
-static void GramInv(val_t *A, idx_t N){
-  int *IPIV = (int *)malloc((N+1) * sizeof(int));
-  int LWORK = N*N;
-  double *WORK = (double *)malloc(LWORK * sizeof(double));
-  int INFO;
-
-  dgetrf_(&N,&N,A,&N,IPIV,&INFO);
-  dgetri_(&N,A,&N,IPIV,WORK,&LWORK,&INFO);
-
-  free(IPIV);
-  free(WORK);
-}
-
-
-
-static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
-  for (int i=0; i<nrows; ++i){
-    for (int j1=0; j1<rank; j1++){
-      for (int j2=0; j2<rank; j2++){
-        lev_score[factor][i] += A[i*rank + j1] * gram[j1*rank + j2] * A[i*rank + j2];
-      }
-    }
-  }
-}
-
-
-
-
 
 
 #ifdef SPLATT_USE_MPI
@@ -974,9 +865,9 @@ void splatt_tc_rrals(
 
   
 
-  // FILE *f_act = fopen("Actual.csv", "w");
-  // FILE *f_frac = fopen("Fraction.csv", "w");
-  // FILE *f_time = fopen("Time.csv", "w");
+  FILE *f_act = fopen("Actual.csv", "w");
+  FILE *f_frac = fopen("Fraction.csv", "w");
+  FILE *f_time = fopen("Time.csv", "w");
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
@@ -1000,27 +891,13 @@ void splatt_tc_rrals(
   double avg_tot_time[3] = {0.0, 0.0, 0.0};
   int count = 0;
 
-
   sp_timer_t mode_timer;
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
 
-  val_t **lev_score = (val_t **)malloc(nmodes * sizeof(val_t *));
-  for(int i=0; i<nmodes; i++)
-    lev_score[i] = (val_t *)malloc((model->dims[i])*sizeof(val_t));
-
-
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
-
-    for(int i=0; i<nmodes; i++){
-      val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
-      GramInv(gram, model->rank);
-
-      getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
-    }
-
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
@@ -1048,7 +925,7 @@ void splatt_tc_rrals(
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, &solving_time, &sampling_time, &mttkrp_time);
+            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, alpha, beta, act, frac, &solving_time, &sampling_time, &mttkrp_time);
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
