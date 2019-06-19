@@ -411,7 +411,7 @@ static void p_process_slice(
     	double max_lim = S_cdf[slice_end-slice_start-1];
     	val_t r = fmod((double)rand(), max_lim) + S_cdf[0];
     	int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
-    	nnz_ptr = slice_nnz[perm_i[indexc]];
+    	nnz_ptr = slice_nnz[indexc];
     	// printf("%d\n", indexc);
       // nnz_ptr = slice_nnz[perm_i[x - slice_start]];
     }
