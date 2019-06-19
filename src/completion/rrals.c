@@ -304,12 +304,11 @@ static void p_process_slice(
   idx_t const * const * const inds = scoo->coo->ind;
 
 
-  gettimeofday(&start_tt, NULL);
   idx_t const slice_start = slice_ptr[slice_id];
   idx_t       slice_end   = slice_ptr[slice_id+1];
   idx_t const slice_size = slice_end - slice_start;
 
-
+  gettimeofday(&start_tt, NULL);
   // Mode which must be chosen to compute MTTKRP
   idx_t *Modes = (idx_t *)malloc((nmodes-1)*sizeof(idx_t));
   int k=0;
@@ -407,14 +406,17 @@ static void p_process_slice(
 
     /* which non-zero to process */
     idx_t nnz_ptr = slice_nnz[x];
+    gettimeofday(&start_t, NULL);
     if(sample) {
     	double max_lim = S_cdf[slice_end-slice_start-1];
-    	val_t r = fmod((double)rand(), max_lim) + max_lim - S_cdf[0];
+    	val_t r = fmod((double)rand(), max_lim) + S_cdf[0];
     	int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
-    	nnz_ptr = slice_nnz[indexc];
+    	nnz_ptr = slice_nnz[perm_i[indexc]];
     	// printf("%d\n", indexc);
       // nnz_ptr = slice_nnz[perm_i[x - slice_start]];
     }
+    gettimeofday(&stop_t, NULL);
+    *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
 
     /* compute hadamard product */
     for(idx_t m=0; m < nmodes; ++m) {
@@ -448,7 +450,7 @@ static void p_process_slice(
     }
   }
   gettimeofday(&stop_tt, NULL);
-    *mttkrp_time += (stop_tt.tv_sec + stop_tt.tv_usec/1000000.0)- (start_tt.tv_sec + start_tt.tv_usec/1000000.0);
+  *mttkrp_time += (stop_tt.tv_sec + stop_tt.tv_usec/1000000.0)- (start_tt.tv_sec + start_tt.tv_usec/1000000.0);
 
   /* flush and accumulate into neqs */
   p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
@@ -997,6 +999,9 @@ void splatt_tc_rrals(
   double avg_tot_time[3] = {0.0, 0.0, 0.0};
   int count = 0;
 
+  double avg_gram_time = 0.0;
+  sp_timer_t gram_timer;
+
 
   sp_timer_t mode_timer;
   timer_reset(&mode_timer);
@@ -1011,12 +1016,15 @@ void splatt_tc_rrals(
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
 
+    timer_fstart(&gram_timer);
     for(int i=0; i<nmodes; i++){
       val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
       gram = GramInv(gram, model->rank);
 
       getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
     }
+    timer_stop(&gram_timer);
+    avg_gram_time += gram_timer.seconds;
 
 
     #pragma omp parallel
@@ -1112,6 +1120,7 @@ void splatt_tc_rrals(
     printf("  Solving Time: %lf\n",(avg_solving_time[i]/count));
     printf("\n");
   }
+  printf("GRAM Timer : %lf\n", (avg_gram_time/count));
 
   #pragma omp parallel
   {
