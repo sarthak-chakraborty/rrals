@@ -11,7 +11,6 @@
 #include <omp.h>
 #include <time.h>
 #include <sys/time.h>
-#include <signal.h>
 
 /* TODO: Conditionally include this OR define lapack prototypes below?
  *       What does this offer beyond prototypes? Can we detect at compile time
@@ -245,6 +244,17 @@ static inline void p_vec_oprod(
 // static idx_t const MAX_THREADS = 1024;
 
 
+static int findCeil(val_t S[], val_t r, int l, int h){
+	int mid;
+    while (l < h)
+    {
+         mid = l + ((h - l) >> 1);
+        (r > S[mid]) ? (l = mid + 1) : (h = mid);
+    }
+    return (S[l] >= r) ? l : 0;
+}
+
+
 #ifndef RRALS_MAX_THREADS
 #define RRALS_MAX_THREADS 1024
 #endif
@@ -309,22 +319,27 @@ static void p_process_slice(
   	Modes[k++] = m;
   }
 
-  printf("%d\n",slice_id);
-
   // Initializing the vector containing leverage score corresponding to the nnz present in the slice
   val_t sum=0.0;
-  val_t *S = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
+  val_t *S_pdf = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
 
   // Computing the vector by multiplying the leverage score for the other two modes
+  val_t score;
   for(int i=slice_start; i < slice_end; i++){
   	idx_t nnz_index = slice_nnz[i];
-  	score = lev_score[Modes[0]][scoo->coo->ind[Mode[0]][nnz_index]] * lev_score[Modes[1]][scoo->coo->ind[Mode[1]][nnz_index]];
-  	S[i-slice_start] = score;
+  	score = lev_score[Modes[0]][scoo->coo->ind[Modes[0]][nnz_index]] * lev_score[Modes[1]][scoo->coo->ind[Modes[1]][nnz_index]];
+  	S_pdf[i-slice_start] = score;
   	sum += score;
   }
   // Normalize the leverage score
-  for(int i=0; i<(slice_end-slicestart); i++)
-  	S[i] /= score;
+  for(int i=0; i<(slice_end-slice_start); i++)
+  	S_pdf[i] /= score;
+
+  // Convert pdf to cdf for easier sampling
+  val_t *S_cdf = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
+  S_cdf[0] = S_pdf[0];
+  for(int i=1; i<(slice_end-slice_start); i++)
+  	S_cdf[i] = S_cdf[i-1] + S_pdf[i];
 
 
   for(idx_t f=0; f < nfactors; ++f) {
@@ -371,7 +386,7 @@ static void p_process_slice(
     idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
     idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
     // printf("%d\n",sample_size);
-    quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
     slice_end = slice_start + sample_size;
   }
   gettimeofday(&stop_t, NULL);
@@ -391,7 +406,10 @@ static void p_process_slice(
     /* which non-zero to process */
     idx_t nnz_ptr = slice_nnz[x];
     if(sample) {
-      nnz_ptr = slice_nnz[perm_i[x - slice_start]];
+    	val_t r = ((double)rand() / RAND_MAX) + (S_cdf[slice_end-slice_start]-S_cdf[0]);
+    	int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
+    	nnz_ptr = slice_nnz[perm_i[indexc]];
+      // nnz_ptr = slice_nnz[perm_i[x - slice_start]];
     }
 
     /* compute hadamard product */
