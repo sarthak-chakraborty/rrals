@@ -331,9 +331,10 @@ static void p_process_slice(
   	S_pdf[i-slice_start] = score;
   	sum += score;
   }
+
   // Normalize the leverage score
   for(int i=0; i<(slice_end-slice_start); i++)
-  	S_pdf[i] /= score;
+  	S_pdf[i] /= sum;
 
   // Convert pdf to cdf for easier sampling
   val_t *S_cdf = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
@@ -396,6 +397,7 @@ static void p_process_slice(
   act[mode][slice_id] = slice_size;
   frac[mode][slice_id] = slice_end - slice_start;
 
+
   /* foreach nnz in slice */
   for(idx_t x = slice_start; x < slice_end; ++x) {
     /* initialize buffers */
@@ -406,9 +408,11 @@ static void p_process_slice(
     /* which non-zero to process */
     idx_t nnz_ptr = slice_nnz[x];
     if(sample) {
-    	val_t r = ((double)rand() / RAND_MAX) + (S_cdf[slice_end-slice_start]-S_cdf[0]);
+    	double max_lim = S_cdf[slice_end-slice_start-1];
+    	val_t r = fmod((double)rand(), max_lim) + max_lim - S_cdf[0];
     	int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
-    	nnz_ptr = slice_nnz[perm_i[indexc]];
+    	nnz_ptr = slice_nnz[indexc];
+    	// printf("%d\n", indexc);
       // nnz_ptr = slice_nnz[perm_i[x - slice_start]];
     }
 
@@ -638,8 +642,6 @@ static void p_densemode_als_update(
 
 
 
-
-
 static val_t *getGram(val_t *A, idx_t nrows, idx_t rank){
   val_t *gram = (val_t *)malloc((rank*rank) * sizeof(val_t));
 
@@ -657,8 +659,6 @@ static val_t *getGram(val_t *A, idx_t nrows, idx_t rank){
   return gram;
 }
 
-
-
 // extern 'C' {
 //     // LU decomoposition of a general matrix
 //     void dgetrf_(int* M, int *N, double* A, int* lda, int* IPIV, int* INFO);
@@ -667,7 +667,7 @@ static val_t *getGram(val_t *A, idx_t nrows, idx_t rank){
 //     void dgetri_(int* N, double* A, int* lda, int* IPIV, double* WORK, int* lwork, int* INFO);
 // }
 
-static void GramInv(val_t *A, idx_t N){
+static val_t *GramInv(val_t *A, idx_t N){
   int *IPIV = (int *)malloc((N+1) * sizeof(int));
   int LWORK = N*N;
   double *WORK = (double *)malloc(LWORK * sizeof(double));
@@ -678,8 +678,9 @@ static void GramInv(val_t *A, idx_t N){
 
   free(IPIV);
   free(WORK);
-}
 
+  return A;
+}
 
 
 static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
@@ -691,9 +692,6 @@ static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, i
     }
   }
 }
-
-
-
 
 
 
@@ -973,9 +971,9 @@ void splatt_tc_rrals(
 
   
 
-  // FILE *f_act = fopen("Actual.csv", "w");
-  // FILE *f_frac = fopen("Fraction.csv", "w");
-  // FILE *f_time = fopen("Time.csv", "w");
+  FILE *f_act = fopen("Actual.csv", "w");
+  FILE *f_frac = fopen("Fraction.csv", "w");
+  FILE *f_time = fopen("Time.csv", "w");
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
@@ -1015,10 +1013,11 @@ void splatt_tc_rrals(
 
     for(int i=0; i<nmodes; i++){
       val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
-      GramInv(gram, model->rank);
+      gram = GramInv(gram, model->rank);
 
       getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
     }
+
 
     #pragma omp parallel
     {
@@ -1071,14 +1070,14 @@ void splatt_tc_rrals(
               tot_frac += frac[m][i];
               tot_time += time_slice[m][i];
 
-              // fprintf(f_frac, "%d,", frac[m][i]);
-              // fprintf(f_act, "%d,", act[m][i]);
-              // fprintf(f_time, "%lf,", time_slice[m][i]);
+              fprintf(f_frac, "%d,", frac[m][i]);
+              fprintf(f_act, "%d,", act[m][i]);
+              fprintf(f_time, "%lf,", time_slice[m][i]);
             }
 
-            // fprintf(f_frac, "\n");
-            // fprintf(f_act, "\n");
-            // fprintf(f_time, "\n");
+            fprintf(f_frac, "\n");
+            fprintf(f_act, "\n");
+            fprintf(f_time, "\n");
 
             avg_tot_time[m] += (double)mode_timer.seconds;
             avg_sampling_time[m] += sampling_time;
@@ -1104,6 +1103,7 @@ void splatt_tc_rrals(
 
   } /* foreach iteration */
 
+    printf("\n");
   for(int i=0; i<nmodes; i++){
     printf("MODE: %d\n-----------\n", i);
     printf("  Total Time: %lf\n", (avg_tot_time[i]/count));

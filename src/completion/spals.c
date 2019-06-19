@@ -242,6 +242,7 @@ static void p_process_slice(
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
     idx_t * const nflush,
+    val_t **const lev_score,
     int alpha,
     int beta,
     int **act,
@@ -261,6 +262,7 @@ static void p_process_tile(
     tc_ws * const ws,
     thd_info * const thd_densefactors,
     int const tid,
+    val_t **const lev_score,
     int alpha,
     int beta,
     int **act,
@@ -320,7 +322,7 @@ static void p_process_tile(
 
     /* process each fiber */
     p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush, alpha, beta, act_dense, frac_dense, tile, sampling_time, mttkrp_time, mttkrptime, samplingtime);
+        mat_accum, hada_accum, &nflush, lev_score, alpha, beta, act_dense, frac_dense, tile, sampling_time, mttkrp_time, mttkrptime, samplingtime);
   } /* foreach slice */
 }
 
@@ -434,6 +436,7 @@ static void p_process_slice(
     val_t * const restrict neqs_buf,
     val_t * const neqs_buf_tree,
     idx_t * const nflush,
+    val_t **const lev_score,
     int alpha,
     int beta,
     int **act,
@@ -478,6 +481,18 @@ static void p_process_slice(
 
   idx_t bufsize = 0;
   val_t * hada = neqs_buf;
+
+
+  // Mode which must be chosen to compute MTTKRP
+  idx_t *Modes = (idx_t *)malloc((nmodes-1)*sizeof(idx_t));
+  int k=0;
+  for(int m=0; m<nmodes; m++){
+    if(mode == m)
+      continue;
+    Modes[k++] = m;
+  }
+
+
 
   gettimeofday(&start_tt, NULL);
   /* push initial idx initialize idxstack */
@@ -713,7 +728,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(csf, 0, i, mats, nfactors, out_row, accum, neqs, mat_accum,
-      hada_accum, &nflush, alpha, beta, act, frac, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime);
+      hada_accum, &nflush, lev_score, alpha, beta, act, frac, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime);
 
 
   /* add regularization to the diagonal */
@@ -749,6 +764,7 @@ static void p_densemode_als_update(
     tc_ws * const ws,
     thd_info * const thd_densefactors,
     int const tid,
+    val_t **lev_score,
     int alpha,
     int beta,
     int **act,
@@ -805,7 +821,7 @@ static void p_densemode_als_update(
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
-    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, alpha, beta, act, frac, act_dense, frac_dense, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime);
+    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, lev_score, alpha, beta, act, frac, act_dense, frac_dense, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime);
   }
 
   for(int tile=0; tile < csf[m].ntiles; tile++){
