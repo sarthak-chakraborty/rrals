@@ -483,14 +483,14 @@ static void p_process_slice(
   val_t * hada = neqs_buf;
 
 
-  // Mode which must be chosen to compute MTTKRP
-  idx_t *Modes = (idx_t *)malloc((nmodes-1)*sizeof(idx_t));
-  int k=0;
-  for(int m=0; m<nmodes; m++){
-    if(mode == m)
-      continue;
-    Modes[k++] = m;
-  }
+  // // Mode which must be chosen to compute MTTKRP
+  // idx_t *Modes = (idx_t *)malloc((nmodes-1)*sizeof(idx_t));
+  // int k=0;
+  // for(int m=0; m<nmodes; m++){
+  //   if(mode == m)
+  //     continue;
+  //   Modes[k++] = m;
+  // }
 
 
 
@@ -582,9 +582,11 @@ static void p_process_slice(
       val_t v;
       val_t * lastrow;
       if(sample == 1) {
-        /* v = vals[jj]; */
+        gettimeofday(&start_t, NULL);
         v = vals[perm_i[jj-start]];
         lastrow = lastmat + (inds[perm_i[jj-start]] * nfactors);
+        gettimeofday(&stop_t, NULL);
+        *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
       } else {
         v = vals[jj];
         lastrow = lastmat + (inds[jj] * nfactors);

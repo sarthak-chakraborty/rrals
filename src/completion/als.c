@@ -1015,11 +1015,11 @@ void splatt_tc_als(
             avg_mttkrp_time[m] += mttkrp_time;
             avg_solving_time[m] += solving_time;
              
-            printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
-                mode_timer.seconds);
-            printf("Solving Time: %lf\n",solving_time);
-            printf("MTTKRP Time: %lf\n", mttkrp_time);
-            printf("\n");
+            // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
+            //     mode_timer.seconds);
+            // printf("Solving Time: %lf\n",solving_time);
+            // printf("MTTKRP Time: %lf\n", mttkrp_time);
+            // printf("\n");
           }
         }
         #pragma omp barrier

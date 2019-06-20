@@ -290,6 +290,7 @@ static void p_process_slice(
     int beta,
     int **act,
     int **frac,
+    int **same,
     double *sampling_time,
     double *mttkrp_time)
 {
@@ -303,10 +304,14 @@ static void p_process_slice(
   idx_t const * const restrict slice_nnz = scoo->slice_nnz[mode];
   idx_t const * const * const inds = scoo->coo->ind;
 
-
   idx_t const slice_start = slice_ptr[slice_id];
   idx_t       slice_end   = slice_ptr[slice_id+1];
   idx_t const slice_size = slice_end - slice_start;
+
+
+  // int *indicator = (int *)malloc((slice_end-slice_start) * sizeof(int));
+  // for(int i=0; i < (slice_end-slice_start); i++)
+  // 	indicator[i] = 0;
 
   gettimeofday(&start_tt, NULL);
   // Mode which must be chosen to compute MTTKRP
@@ -411,12 +416,24 @@ static void p_process_slice(
     	double max_lim = S_cdf[slice_end-slice_start-1];
     	val_t r = fmod((double)rand(), max_lim) + S_cdf[0];
     	int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
+    	// indicator[indexc] += 1;
     	nnz_ptr = slice_nnz[indexc];
-    	// printf("%d\n", indexc);
       // nnz_ptr = slice_nnz[perm_i[x - slice_start]];
     }
     gettimeofday(&stop_t, NULL);
     *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
+
+
+    // ///////////////////////////////////////////////////////////////////////////
+    // // Check how many same samples has been selected more than once
+    // int same_nnz_sampled = 0;
+    // for(int i=0; i<(slice_end-slice_start); i++){
+    // 	if(indicator[i] > 0)
+    // 		same_nnz_sampled += indicator[i]-1;
+    // }
+    // same[mode][slice_id] = same_nnz_sampled;
+    // //////////////////////////////////////////////////////////////////////////
+
 
     /* compute hadamard product */
     for(idx_t m=0; m < nmodes; ++m) {
@@ -484,6 +501,7 @@ static void p_update_slice(
     int beta,
     int **act,
     int **frac,
+    int **same,
     double *solving_time,
     double *sampling_time,
     double *mttkrp_time)
@@ -534,7 +552,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(scoo, slice_id, mode, mats, nfactors, out_row, accum, neqs,
-      mat_accum, hada_accum, &nflush, lev_score, alpha, beta, act, frac, sampling_time, mttkrp_time);
+      mat_accum, hada_accum, &nflush, lev_score, alpha, beta, act, frac, same, sampling_time, mttkrp_time);
 
   gettimeofday(&start, NULL);
   /* add regularization to the diagonal */
@@ -976,6 +994,7 @@ void splatt_tc_rrals(
   FILE *f_act = fopen("Actual.csv", "w");
   FILE *f_frac = fopen("Fraction.csv", "w");
   FILE *f_time = fopen("Time.csv", "w");
+  FILE *f_same = fopen("Same.csv", "w");
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
@@ -985,6 +1004,11 @@ void splatt_tc_rrals(
   int **frac = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
     frac[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
+  }
+
+  int **same = (int **)malloc(nmodes*sizeof(int *));
+  for(int i=0; i<nmodes; i++){
+    same[i] = (int *)malloc((scoo->dims[i])*sizeof(int));
   }
 
   double **time_slice = (double **)malloc(nmodes*sizeof(double *));
@@ -1016,15 +1040,15 @@ void splatt_tc_rrals(
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
 
-    timer_fstart(&gram_timer);
-    for(int i=0; i<nmodes; i++){
-      val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
-      gram = GramInv(gram, model->rank);
+    // timer_fstart(&gram_timer);
+    // for(int i=0; i<nmodes; i++){
+    //   val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
+    //   gram = GramInv(gram, model->rank);
 
-      getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
-    }
-    timer_stop(&gram_timer);
-    avg_gram_time += gram_timer.seconds;
+    //   getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
+    // }
+    // timer_stop(&gram_timer);
+    // avg_gram_time += gram_timer.seconds;
 
 
     #pragma omp parallel
@@ -1054,7 +1078,7 @@ void splatt_tc_rrals(
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, &solving_time, &sampling_time, &mttkrp_time);
+            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, same, &solving_time, &sampling_time, &mttkrp_time);
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
@@ -1073,19 +1097,25 @@ void splatt_tc_rrals(
             long long int tot_act = 0;
             long long int tot_frac = 0;
             double tot_time = 0.0;
+            long long int tot_same = 0;
             for(int i=0; i<scoo->dims[m]; i++){
               tot_act += act[m][i];
               tot_frac += frac[m][i];
               tot_time += time_slice[m][i];
+              // tot_same += same[m][i];
 
               fprintf(f_frac, "%d,", frac[m][i]);
               fprintf(f_act, "%d,", act[m][i]);
               fprintf(f_time, "%lf,", time_slice[m][i]);
+              // fprintf(f_same, "%d\n", same[m][i]);
             }
 
             fprintf(f_frac, "\n");
             fprintf(f_act, "\n");
             fprintf(f_time, "\n");
+            // fprintf(f_same, "\n");
+
+            // printf(" Sampled:%lld 	Same sampled: %lld 	percent:%0.3f\n", tot_frac, tot_same, ((float)tot_same)/tot_frac);
 
             avg_tot_time[m] += (double)mode_timer.seconds;
             avg_sampling_time[m] += sampling_time;
