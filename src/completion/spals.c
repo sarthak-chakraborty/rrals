@@ -564,7 +564,7 @@ static void p_process_slice(
         perm_i[n-start] = n;
       }
       idx_t sample_size = SS_MIN(ntotal, sample_threshold + ((ntotal-sample_threshold) / sample_rate));
-      quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      quick_shuffle(perm_i, perm_i, sample_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
       iter_end = start + sample_size;
     } else {
       sample = 0;

@@ -324,7 +324,7 @@ static void p_process_slice(
   }
 
   // Initializing the vector containing leverage score corresponding to the nnz present in the slice
-  val_t sum=0.0;
+  // val_t sum=0.0;
   val_t *S_pdf = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
 
   // Computing the vector by multiplying the leverage score for the other two modes
@@ -333,18 +333,18 @@ static void p_process_slice(
   	idx_t nnz_index = slice_nnz[i];
   	score = lev_score[Modes[0]][scoo->coo->ind[Modes[0]][nnz_index]] * lev_score[Modes[1]][scoo->coo->ind[Modes[1]][nnz_index]];
   	S_pdf[i-slice_start] = score;
-  	sum += score;
+  	// sum += score;
   }
 
-  // Normalize the leverage score
-  for(int i=0; i<(slice_end-slice_start); i++)
-  	S_pdf[i] /= sum;
+  // // Normalize the leverage score
+  // for(int i=0; i<(slice_end-slice_start); i++)
+  // 	S_pdf[i] /= sum;
 
-  // Convert pdf to cdf for easier sampling
-  val_t *S_cdf = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
-  S_cdf[0] = S_pdf[0];
-  for(int i=1; i<(slice_end-slice_start); i++)
-  	S_cdf[i] = S_cdf[i-1] + S_pdf[i];
+  // // Convert pdf to cdf for easier sampling
+  // val_t *S_cdf = (val_t *)malloc((slice_end - slice_start) * sizeof(val_t));
+  // S_cdf[0] = S_pdf[0];
+  // for(int i=1; i<(slice_end-slice_start); i++)
+  // 	S_cdf[i] = S_cdf[i-1] + S_pdf[i];
 
 
   for(idx_t f=0; f < nfactors; ++f) {
@@ -390,8 +390,8 @@ static void p_process_slice(
     }
     idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
     idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
-    // printf("%d\n",sample_size);
     // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    quick_shuffle(perm_i, S_pdf, slice_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
     slice_end = slice_start + sample_size;
   }
   gettimeofday(&stop_t, NULL);
@@ -413,12 +413,13 @@ static void p_process_slice(
     idx_t nnz_ptr = slice_nnz[x];
     gettimeofday(&start_t, NULL);
     if(sample) {
-    	double max_lim = S_cdf[slice_end-slice_start-1];
-    	val_t r = fmod((double)rand(), max_lim) + S_cdf[0];
-    	int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
+    	// double max_lim = S_cdf[slice_end-slice_start-1] - S_cdf[0];
+    	// val_t r = fmod((double)rand(), max_lim) + S_cdf[0];
+    	// int indexc = findCeil(S_cdf, r, 0, (slice_end-slice_start-1));
+    	// idx_t indexc = x - slice_start;
     	// indicator[indexc] += 1;
-    	nnz_ptr = slice_nnz[indexc];
-      // nnz_ptr = slice_nnz[perm_i[x - slice_start]];
+    	// nnz_ptr = slice_nnz[indexc];
+      nnz_ptr = slice_nnz[perm_i[x - slice_start]];
     }
     gettimeofday(&stop_t, NULL);
     *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
@@ -468,6 +469,10 @@ static void p_process_slice(
   }
   gettimeofday(&stop_tt, NULL);
   *mttkrp_time += (stop_tt.tv_sec + stop_tt.tv_usec/1000000.0)- (start_tt.tv_sec + start_tt.tv_usec/1000000.0);
+
+  free(S_pdf);
+  // free(S_cdf);
+  free(Modes);
 
   /* flush and accumulate into neqs */
   p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
@@ -994,7 +999,7 @@ void splatt_tc_rrals(
   FILE *f_act = fopen("Actual.csv", "w");
   FILE *f_frac = fopen("Fraction.csv", "w");
   FILE *f_time = fopen("Time.csv", "w");
-  FILE *f_same = fopen("Same.csv", "w");
+  // FILE *f_same = fopen("Same.csv", "w");
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
   for(int i=0; i<nmodes; i++){
@@ -1040,15 +1045,15 @@ void splatt_tc_rrals(
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
 
-    // timer_fstart(&gram_timer);
-    // for(int i=0; i<nmodes; i++){
-    //   val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
-    //   gram = GramInv(gram, model->rank);
+    timer_fstart(&gram_timer);
+    for(int i=0; i<nmodes; i++){
+      val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
+      gram = GramInv(gram, model->rank);
 
-    //   getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
-    // }
-    // timer_stop(&gram_timer);
-    // avg_gram_time += gram_timer.seconds;
+      getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
+    }
+    timer_stop(&gram_timer);
+    avg_gram_time += gram_timer.seconds;
 
 
     #pragma omp parallel

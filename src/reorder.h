@@ -87,8 +87,17 @@ void shuffle_idx(
  */
 void quick_shuffle(
     idx_t * const arr,
+    val_t * const weight,
+    idx_t M,
     idx_t const N,
     unsigned int * seed);
+
+
+// void quick_shuffle(
+//     idx_t * const arr,
+//     idx_t const N,
+//     unsigned int * seed);
+
 
 
 #define build_pptr splatt_build_pptr

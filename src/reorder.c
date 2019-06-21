@@ -603,19 +603,92 @@ idx_t fast_rand_idx(unsigned int * seed)
   return (idx_t) (fast_rand(seed) << 16) | fast_rand(seed);
 }
 
+
+void heapify(idx_t *a, val_t *weight, idx_t M, int i) 
+{ 
+    int largest = i; // Initialize largest as root 
+    int l = 2 * i + 1; // left = 2*i + 1 
+    int r = 2 * i + 2; // right = 2*i + 2 
+  
+    // If left child is larger than root 
+    if (l < M && weight[l] < weight[largest]) 
+        largest = l; 
+  
+    // If right child is larger than largest so far 
+    if (r < M && weight[r] < weight[largest]) 
+        largest = r; 
+  
+    // If largest is not root 
+    if (largest != i) { 
+      idx_t temp = a[i];
+      a[i] = a[largest];
+      a[largest] = temp; 
+  
+      // Recursively heapify the affected sub-tree 
+      heapify(a, weight, M, largest); 
+  } 
+} 
+
+
+
+void buildHeap(idx_t *a, val_t *weight, idx_t M){
+  for(int i = M/2 - 1; i >= 0; i--)
+    heapify(a, weight, M, i); 
+}
+
+
 void quick_shuffle(
     idx_t * const arr,
+    val_t * const weight,
+    idx_t M,
     idx_t const N,
     unsigned int * seed)
 {
-  /* shuffle perm */
-  for(idx_t n=0; n < N-2; ++n) {
-    /* random idx in range [n, dims[m]) */
-    idx_t j = (fast_rand(seed) % (N - n)) + n;
 
-    /* swap n and j */
-    idx_t const tmp = arr[n];
-    arr[n] = arr[j];
-    arr[j] = tmp;
+  idx_t *a = (idx_t *)malloc(M * sizeof(idx_t));
+  for(int i=0; i<M; i++)
+    a[i] = i;
+
+  buildHeap(a, weight, M);
+
+  while(M > 1){
+    idx_t temp = arr[a[0]];
+    arr[a[0]] = arr[M-1];
+    arr[M-1] = temp;
+
+    temp = a[0];
+    a[0] = a[M-1];
+    a[M-1] = temp;
+
+    temp = weight[a[0]];
+    weight[a[0]] = weight[M-1];
+    weight[M-1] = temp;
+
+    M--;
+
+    heapify(a, weight, M, 0);
   }
+
+  free(a);
 }
+
+
+// void quick_shuffle(
+//     idx_t * const arr,
+//     idx_t const N,
+//     unsigned int * seed)
+// {
+
+//   /* shuffle perm */
+//   for(idx_t n=0; n < N-2; ++n) {
+//      // random idx in range [n, dims[m]) 
+//     idx_t j = (fast_rand(seed) % (N - n)) + n;
+
+//     /* swap n and j */
+//     idx_t const tmp = arr[n];
+//     arr[n] = arr[j];
+//     arr[j] = tmp;
+//   }
+// }
+
+
