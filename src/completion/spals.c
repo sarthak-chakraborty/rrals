@@ -382,7 +382,7 @@ static void p_process_slice3(
   int tot_nnz = 0;
   int tot_sampled = 0;
   idx_t *nnz_fib = (idx_t *)malloc((sptr[i+1] - sptr[i]) * sizeof(idx_t));
-
+  // printf("%d\n", sptr[i+1]-sptr[i]);
 
 
   // Sampling in fibre precalculation (Uniform sampling)
@@ -401,7 +401,7 @@ static void p_process_slice3(
   idx_t sample_slice = SS_MIN(tot_nnz, sample_threshold + ((tot_nnz-sample_threshold) / sample_rate));
   // Distribute the # of samples to each fibre based on uniform sampling
   for(int i=0; i < (sptr[i+1] - sptr[i]); i++)
-    nnz_fib[i] = (nnz_fib[i] / tot_nnz) * sample_slice;
+    nnz_fib[i] = (nnz_fib[i] * sample_slice) / tot_nnz;
 
 
 
@@ -439,18 +439,7 @@ static void p_process_slice3(
       iter_end = end;
     }
 
-    // for(idx_t jj=start; jj < iter_end; ++jj){
-    //   val_t v;
-    //   val_t * bv;
-    //   if(sample == 1){
-    //     v = vals[perm_i[jj - start]];
-    //     bv = B + (inds[perm_i[jj - start]] * nfactors);
-    //   }
-    //   else{
-    //     v = vals[jj];
-    //     bv = B + (inds[jj] * nfactors);
-    //   }
-    // }
+    tot_sampled += iter_end - start;
 
     /* first entry of the fiber is used to initialize accum */
     // idx_t const jjfirst  = fptr[fib];
@@ -460,6 +449,7 @@ static void p_process_slice3(
     //   accum[r] = vfirst * bv[r];
     //   hada[r] = av[r] * bv[r];
     // }
+
 
     hada += nfactors;
     if(++bufsize == ALS_BUFSIZE) {
@@ -503,6 +493,10 @@ static void p_process_slice3(
     }
 
   } /* foreach fiber */
+
+    frac[mode][i] = tot_sampled;
+    
+    free(nnz_fib);
 
   /* final flush */
   p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);

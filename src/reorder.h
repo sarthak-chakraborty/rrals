@@ -95,7 +95,7 @@ void shuffle_idx(
 
 void quick_shuffle(
     idx_t * const arr,
-    idx_t const N,
+    int const N,
     unsigned int * seed);
 
 

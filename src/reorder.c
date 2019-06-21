@@ -675,12 +675,12 @@ void buildHeap(idx_t *a, val_t *weight, idx_t M){
 
 void quick_shuffle(
     idx_t * const arr,
-    idx_t const N,
+    int const N,
     unsigned int * seed)
 {
 
   /* shuffle perm */
-  for(idx_t n=0; n < N-2; ++n) {
+  for(int n=0; n < N-2; ++n) {
      // random idx in range [n, dims[m]) 
     idx_t j = (fast_rand(seed) % (N - n)) + n;
 
