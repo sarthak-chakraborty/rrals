@@ -19,7 +19,7 @@
 
 /* Use hardcoded 3-mode kernels when possible. Results in small speedups. */
 #ifndef USE_3MODE_OPT
-#define USE_3MODE_OPT 0
+#define USE_3MODE_OPT 1
 #endif
 
 
@@ -327,7 +327,16 @@ static void p_process_tile(
 }
 
 
+#ifndef SPALS_MAX_THREADS
+#define SPALS_MAX_THREADS 1024
+#endif
 
+static idx_t const PERM_INIT = 128;
+static idx_t perm_i_lengths[SPALS_MAX_THREADS];
+static idx_t * perm_i_global[SPALS_MAX_THREADS];
+
+static idx_t const SEED_PADDING = 16;
+static unsigned int * sample_seeds;
 
 
 static void p_process_slice3(
@@ -341,7 +350,12 @@ static void p_process_slice3(
     val_t * const restrict accum,
     val_t * const restrict neqs,
     val_t * const restrict neqs_buf,
-    idx_t * const nflush)
+    idx_t * const nflush,
+    int alpha,
+    int beta,
+    int **act,
+    int **frac,
+    int mode)
 {
   csf_sparsity const * const pt = csf->pt + tile;
   idx_t const * const restrict sptr = pt->fptr[0];
@@ -350,22 +364,102 @@ static void p_process_slice3(
   idx_t const * const restrict inds = pt->fids[2];
   val_t const * const restrict vals = pt->vals;
 
-  val_t * hada = neqs_buf;
+  idx_t const sample_threshold = alpha * nfactors;
+  idx_t const sample_rate = beta;
 
+  int const tid = splatt_omp_get_thread_num();
+  idx_t * perm_i = NULL;
+
+  /* clear out accumulation buffer */
+  for(idx_t f=0; f < nfactors; ++f) {
+    accum[f + nfactors] = 0;
+  }
+
+  val_t * hada = neqs_buf;
   idx_t bufsize = 0;
+
+
+  int tot_nnz = 0;
+  int tot_sampled = 0;
+  idx_t *nnz_fib = (idx_t *)malloc((sptr[i+1] - sptr[i]) * sizeof(idx_t));
+
+
+
+  // Sampling in fibre precalculation (Uniform sampling)
+  for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib){
+    idx_t const ntotal = fptr[fib+1] - fptr[fib];
+
+    nnz_fib[fib - sptr[i]] = ntotal;
+    tot_nnz += ntotal;
+  }
+
+  act[mode][i] = tot_nnz;
+
+
+
+  // Number of samples required from each slice
+  idx_t sample_slice = SS_MIN(tot_nnz, sample_threshold + ((tot_nnz-sample_threshold) / sample_rate));
+  // Distribute the # of samples to each fibre based on uniform sampling
+  for(int i=0; i < (sptr[i+1] - sptr[i]); i++)
+    nnz_fib[i] = (nnz_fib[i] / tot_nnz) * sample_slice;
+
+
+
 
   /* process each fiber */
   for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
     val_t const * const restrict av = A  + (fids[fib] * nfactors);
 
-    /* first entry of the fiber is used to initialize accum */
-    idx_t const jjfirst  = fptr[fib];
-    val_t const vfirst   = vals[jjfirst];
-    val_t const * const restrict bv = B + (inds[jjfirst] * nfactors);
-    for(idx_t r=0; r < nfactors; ++r) {
-      accum[r] = vfirst * bv[r];
-      hada[r] = av[r] * bv[r];
+    int sample;
+    idx_t const start = fptr[fib];
+    idx_t const end = fptr[fib+1];
+
+    idx_t const ntotal = end-start;
+    idx_t iter_end;
+
+    // Sample form each fibre
+    if(ntotal > sample_threshold) {
+      sample = 1;
+
+      if(ntotal > perm_i_lengths[tid]) {
+        perm_i_lengths[tid] = ntotal;
+        splatt_free(perm_i_global[tid]);
+        perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
+      }
+      perm_i = perm_i_global[tid];
+      for(idx_t n=start; n < end; ++n) {
+        perm_i[n-start] = n;
+      }
+      idx_t sample_size = nnz_fib[fib - sptr[i]];
+      // quick_shuffle(perm_i, perm_i, sample_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      iter_end = start + sample_size;
+    } else {
+      sample = 0;
+      iter_end = end;
     }
+
+    // for(idx_t jj=start; jj < iter_end; ++jj){
+    //   val_t v;
+    //   val_t * bv;
+    //   if(sample == 1){
+    //     v = vals[perm_i[jj - start]];
+    //     bv = B + (inds[perm_i[jj - start]] * nfactors);
+    //   }
+    //   else{
+    //     v = vals[jj];
+    //     bv = B + (inds[jj] * nfactors);
+    //   }
+    // }
+
+    /* first entry of the fiber is used to initialize accum */
+    // idx_t const jjfirst  = fptr[fib];
+    // val_t const vfirst   = vals[jjfirst];
+    // val_t const * const restrict bv = B + (inds[jjfirst] * nfactors);
+    // for(idx_t r=0; r < nfactors; ++r) {
+    //   accum[r] = vfirst * bv[r];
+    //   hada[r] = av[r] * bv[r];
+    // }
 
     hada += nfactors;
     if(++bufsize == ALS_BUFSIZE) {
@@ -376,9 +470,19 @@ static void p_process_slice3(
     }
 
     /* foreach nnz in fiber */
-    for(idx_t jj=fptr[fib]+1; jj < fptr[fib+1]; ++jj) {
-      val_t const v = vals[jj];
-      val_t const * const restrict bv = B + (inds[jj] * nfactors);
+    for(idx_t jj=start; jj < iter_end; ++jj) {
+      val_t v;
+      val_t * bv;
+      if(sample == 1){
+        v = vals[perm_i[jj - start]];
+        bv = B + (inds[perm_i[jj - start]] * nfactors);
+      }
+      else{
+        v = vals[jj];
+        bv = B + (inds[jj] * nfactors);
+      }
+      // val_t const v = vals[jj];
+      // val_t const * const restrict bv = B + (inds[jj] * nfactors);
       for(idx_t r=0; r < nfactors; ++r) {
         accum[r] += v * bv[r];
         hada[r] = av[r] * bv[r];
@@ -413,16 +517,16 @@ static void p_process_slice3(
 #define SPALS_MAX_THREADS 1024
 #endif
 
-static idx_t const PERM_INIT = 128;
-static idx_t perm_i_lengths[SPALS_MAX_THREADS];
-static idx_t * perm_i_global[SPALS_MAX_THREADS];
+// static idx_t const PERM_INIT = 128;
+// static idx_t perm_i_lengths[SPALS_MAX_THREADS];
+// static idx_t * perm_i_global[SPALS_MAX_THREADS];
 
 /*
  * Each thread is given a random seed to use for sampling. We pad them to
  * ensure each falls on a different cache line (to avoid false sharing).
  */
-static idx_t const SEED_PADDING = 16;
-static unsigned int * sample_seeds;
+// static idx_t const SEED_PADDING = 16;
+// static unsigned int * sample_seeds;
 
 static void p_process_slice(
     splatt_csf const * const csf,
@@ -469,10 +573,11 @@ static void p_process_slice(
 #if USE_3MODE_OPT
   if(nmodes == 3) {
     p_process_slice3(csf, tile, i, mvals[1], mvals[2], nfactors, out_row,
-        accum, neqs, neqs_buf, nflush);
+        accum, neqs, neqs_buf, nflush, alpha, beta, act, frac, mode);
     return;
   }
 #endif
+
 
   idx_t const * const * const restrict fp = (idx_t const * const *) pt->fptr;
   idx_t const * const * const restrict fids = (idx_t const * const *) pt->fids;
@@ -564,7 +669,8 @@ static void p_process_slice(
         perm_i[n-start] = n;
       }
       idx_t sample_size = SS_MIN(ntotal, sample_threshold + ((ntotal-sample_threshold) / sample_rate));
-      quick_shuffle(perm_i, perm_i, sample_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      // quick_shuffle(perm_i, perm_i, sample_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
       iter_end = start + sample_size;
     } else {
       sample = 0;
@@ -1266,6 +1372,7 @@ void splatt_tc_spals(
 
       getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
     }
+
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
@@ -1332,7 +1439,7 @@ void splatt_tc_spals(
 
 
 
-            // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // if(m==2)
             //   printf("  Total time: %lf\n", tottime_mode3);
             // else

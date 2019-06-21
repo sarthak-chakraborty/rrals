@@ -637,58 +637,58 @@ void buildHeap(idx_t *a, val_t *weight, idx_t M){
 }
 
 
-void quick_shuffle(
-    idx_t * const arr,
-    val_t * const weight,
-    idx_t M,
-    idx_t const N,
-    unsigned int * seed)
-{
-
-  idx_t *a = (idx_t *)malloc(M * sizeof(idx_t));
-  for(int i=0; i<M; i++)
-    a[i] = i;
-
-  buildHeap(a, weight, M);
-
-  while(M > 1){
-    idx_t temp = arr[a[0]];
-    arr[a[0]] = arr[M-1];
-    arr[M-1] = temp;
-
-    temp = a[0];
-    a[0] = a[M-1];
-    a[M-1] = temp;
-
-    temp = weight[a[0]];
-    weight[a[0]] = weight[M-1];
-    weight[M-1] = temp;
-
-    M--;
-
-    heapify(a, weight, M, 0);
-  }
-
-  free(a);
-}
-
-
 // void quick_shuffle(
 //     idx_t * const arr,
+//     val_t * const weight,
+//     idx_t M,
 //     idx_t const N,
 //     unsigned int * seed)
 // {
 
-//   /* shuffle perm */
-//   for(idx_t n=0; n < N-2; ++n) {
-//      // random idx in range [n, dims[m]) 
-//     idx_t j = (fast_rand(seed) % (N - n)) + n;
+//   idx_t *a = (idx_t *)malloc(M * sizeof(idx_t));
+//   for(int i=0; i<M; i++)
+//     a[i] = i;
 
-//     /* swap n and j */
-//     idx_t const tmp = arr[n];
-//     arr[n] = arr[j];
-//     arr[j] = tmp;
+//   buildHeap(a, weight, M);
+
+//   while(M > 1){
+//     idx_t temp = arr[a[0]];
+//     arr[a[0]] = arr[M-1];
+//     arr[M-1] = temp;
+
+//     temp = a[0];
+//     a[0] = a[M-1];
+//     a[M-1] = temp;
+
+//     temp = weight[a[0]];
+//     weight[a[0]] = weight[M-1];
+//     weight[M-1] = temp;
+
+//     M--;
+
+//     heapify(a, weight, M, 0);
 //   }
+
+//   free(a);
 // }
+
+
+void quick_shuffle(
+    idx_t * const arr,
+    idx_t const N,
+    unsigned int * seed)
+{
+
+  /* shuffle perm */
+  for(idx_t n=0; n < N-2; ++n) {
+     // random idx in range [n, dims[m]) 
+    idx_t j = (fast_rand(seed) % (N - n)) + n;
+
+    /* swap n and j */
+    idx_t const tmp = arr[n];
+    arr[n] = arr[j];
+    arr[j] = tmp;
+  }
+}
 
 

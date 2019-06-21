@@ -390,8 +390,8 @@ static void p_process_slice(
     }
     idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
     idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
-    // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-    quick_shuffle(perm_i, S_pdf, slice_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    // quick_shuffle(perm_i, S_pdf, slice_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
     slice_end = slice_start + sample_size;
   }
   gettimeofday(&stop_t, NULL);
