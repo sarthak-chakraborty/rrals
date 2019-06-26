@@ -368,34 +368,38 @@ static void p_process_slice(
     sample_threshold = alpha * nfactors;
   idx_t const sample_rate = beta;
   int sample = 0;
-  if(slice_size > sample_threshold) {
-    sample = 1;
-    /* realloc sample buffer if needed */
-    if(slice_size > perm_i_lengths[tid]) {
-      perm_i_lengths[tid] = slice_size;
-      splatt_free(perm_i_global[tid]);
-      perm_i_global[tid] = splatt_malloc(slice_size * sizeof(*perm_i_global));
-    }
 
-    /* fill buffer with indices and shuffle to get sampled nnz */
-    /* RRALS-TODO: can we intead just sample nnz_ptr[]? Or do an initial shuffle
-     * at the beginning of RRALS (or every few its) and instead just choose
-     * a rand starting index? Then proceed and process non-zeros
-     * [rand_start, (rand_start+sample_size) % end).
-     *
-     * Current implementation is still O(nnz) instead of O(sampled nnz). */
-    perm_i = perm_i_global[tid];
-    for(idx_t n=slice_start; n < slice_end; ++n) {
-      perm_i[n-slice_start] = n;
-    }
-    idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
-    idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
-    quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-    // quick_shuffle(perm_i, S_pdf, slice_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-    slice_end = slice_start + sample_size;
+  if(mode == 2 || mode == 3){
+  	if(slice_size > sample_threshold) {
+	    sample = 1;
+	    /* realloc sample buffer if needed */
+	    if(slice_size > perm_i_lengths[tid]) {
+	      perm_i_lengths[tid] = slice_size;
+	      splatt_free(perm_i_global[tid]);
+	      perm_i_global[tid] = splatt_malloc(slice_size * sizeof(*perm_i_global));
+	    }
+
+	    /* fill buffer with indices and shuffle to get sampled nnz */
+	    /* RRALS-TODO: can we intead just sample nnz_ptr[]? Or do an initial shuffle
+	     * at the beginning of RRALS (or every few its) and instead just choose
+	     * a rand starting index? Then proceed and process non-zeros
+	     * [rand_start, (rand_start+sample_size) % end).
+	     *
+	     * Current implementation is still O(nnz) instead of O(sampled nnz). */
+	    perm_i = perm_i_global[tid];
+	    for(idx_t n=slice_start; n < slice_end; ++n) {
+	      perm_i[n-slice_start] = n;
+	    }
+	    idx_t const my_sample_size = sample_threshold + ((slice_size-sample_threshold) / sample_rate);
+	    idx_t const sample_size = SS_MIN(slice_size, my_sample_size);
+	    // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+	    quick_shuffle(perm_i, S_pdf, slice_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+	    slice_end = slice_start + sample_size;
+	  }
+	  gettimeofday(&stop_t, NULL);
+	  *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
   }
-  gettimeofday(&stop_t, NULL);
-  *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
+  
 
   /* store diagnostics */
   act[mode][slice_id] = slice_size;
@@ -408,6 +412,7 @@ static void p_process_slice(
     for(idx_t f=0; f < nfactors; ++f) {
       hada[f] = 1.;
     }
+
 
     /* which non-zero to process */
     idx_t nnz_ptr = slice_nnz[x];
@@ -1127,7 +1132,7 @@ void splatt_tc_rrals(
             avg_mttkrp_time[m] += (mttkrp_time - sampling_time);
             avg_solving_time[m] += solving_time;
             
-            // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // printf("  time: %lf\n", tot_time);
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
             //     mode_timer.seconds);

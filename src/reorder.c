@@ -13,6 +13,8 @@
 #include "timer.h"
 #include "util.h"
 
+#include <math.h>
+
 
 /******************************************************************************
  * PRIVATE FUNCTIONS
@@ -673,8 +675,58 @@ void buildHeap(idx_t *a, val_t *weight, idx_t M){
 // }
 
 
+// void quick_shuffle(
+//     idx_t * const arr,
+//     val_t * const weight,
+//     idx_t M,
+//     idx_t const N,
+//     unsigned int * seed)
+// {
+
+//   double * key = (double *)malloc(M * sizeof(double));
+//   idx_t * a = (idx_t *)malloc(M * sizeof(idx_t));
+//   val_t min_key = 32767;
+//   idx_t pos = 0;
+//   for(int i=0; i<M; i++){
+//     double j = (double)rand() / RAND_MAX;
+//     a[i] = arr[i];
+//     key[i] = pow(j, (1.0/(double)weight[i]));
+//     if(key[i] < min_key){
+//       min_key = key[i];
+//       pos = i;
+//     }
+//   }
+
+//   val_t new_key;
+//   for(int i=M; i<N; i++){
+//     double j = (double)rand() / RAND_MAX;
+//     new_key = pow(j, (1.0/(double)weight[i]));
+//     if(new_key > min_key){
+//       a[pos] = arr[i];
+
+//       key[pos] = new_key;
+
+//       min_key = new_key;
+//       for(int k=0; k<M; k++){
+//         if(key[k] < min_key){
+//           min_key = key[k];
+//           pos = k;
+//         }
+//       }
+//     }
+//   }
+//   for(int i=0; i<M; i++)
+//     arr[i] = a[i];
+
+//   free(a);
+//   free(key);
+// }
+
+
 void quick_shuffle(
     idx_t * const arr,
+    val_t * const weight,
+    idx_t M,
     int const N,
     unsigned int * seed)
 {

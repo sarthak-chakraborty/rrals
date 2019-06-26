@@ -85,18 +85,18 @@ void shuffle_idx(
  * @param N The number of elements.
  * @param seed The random seed for re-entry.
  */
-// void quick_shuffle(
-//     idx_t * const arr,
-//     val_t * const weight,
-//     idx_t M,
-//     idx_t const N,
-//     unsigned int * seed);
-
-
 void quick_shuffle(
     idx_t * const arr,
+    val_t * const weight,
+    idx_t M,
     int const N,
     unsigned int * seed);
+
+
+// void quick_shuffle(
+//     idx_t * const arr,
+//     int const N,
+//     unsigned int * seed);
 
 
 
