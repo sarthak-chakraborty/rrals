@@ -338,7 +338,7 @@ static idx_t * perm_i_global[SPALS_MAX_THREADS];
 static idx_t const SEED_PADDING = 16;
 static unsigned int * sample_seeds;
 
-#define USE_LVRG_SAMPLING 0
+#define USE_LVRG_SAMPLING 1
 
 static void p_process_slice3(
     splatt_csf const * const csf,
@@ -397,30 +397,39 @@ static void p_process_slice3(
   int tot_sampled = 0;
   val_t *nnz_fib = (val_t *)malloc((sptr[i+1] - sptr[i]) * sizeof(val_t));
 
+  for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+    nnz_fib[k] = 0;
+
   // Sampling in fibre precalculation (Uniform sampling)
   idx_t nnz_index;
+  val_t sum = 0.0;
   for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib){
     idx_t const ntotal = fptr[fib+1] - fptr[fib];
     tot_nnz += ntotal;
 
     if(USE_LVRG_SAMPLING){
+      idx_t true_indices[3];
+      true_indices[csf->dim_perm[0]] = i;
+      true_indices[csf->dim_perm[1]] = fids[fib];
+      true_indices[csf->dim_perm[2]] = inds[fptr[fib]];
 
-      val_t sum = 0.0;
       val_t score;
       for(idx_t jj=fptr[fib]; jj < fptr[fib+1]; jj++){
-        score = lev_score[Modes[0]][inds[jj]] * lev_score[Modes[1]][inds[jj]];
-        nnz_fib[fib - sptr[i]] = score;
-        sum += score;
+        score = lev_score[Modes[0]][true_indices[Modes[0]]] * lev_score[Modes[1]][true_indices[Modes[1]]];
+        nnz_fib[fib - sptr[i]] += score;
       }
-      for(int k=0; i < (fptr[fib+1] - fptr[fib]); k++)
-        nnz_fib[k] /= sum;
+      sum += nnz_fib[fib - sptr[i]];
     }
     else
       nnz_fib[fib - sptr[i]] = ntotal;
   }
 
-  act[mode][i] = tot_nnz;
+  if(USE_LVRG_SAMPLING){
+    for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+      nnz_fib[k] /= sum;
+  }
 
+  act[mode][i] = tot_nnz;
 
 
   // Number of samples required from each slice
@@ -435,6 +444,7 @@ static void p_process_slice3(
     for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
       nnz_fib[k] = (double)(nnz_fib[k] * sample_slice) / tot_nnz;
   }
+
 
 
   /* process each fiber */
@@ -473,13 +483,21 @@ static void p_process_slice3(
     tot_sampled += iter_end - start;
 
     /* first entry of the fiber is used to initialize accum */
-    // idx_t const jjfirst  = fptr[fib];
-    // val_t const vfirst   = vals[jjfirst];
-    // val_t const * const restrict bv = B + (inds[jjfirst] * nfactors);
-    // for(idx_t r=0; r < nfactors; ++r) {
-    //   accum[r] = vfirst * bv[r];
-    //   hada[r] = av[r] * bv[r];
-    // }
+    idx_t const jjfirst  = start;
+    val_t vfirst;
+    val_t * bv;
+    if(sample == 1){
+      vfirst = vals[perm_i[jjfirst - start]];
+      bv = B + (inds[perm_i[jjfirst - start]] * nfactors);
+    }
+    else{
+      vfirst = vals[jjfirst];
+      bv = B + (inds[jjfirst] * nfactors);
+    }
+    for(idx_t r=0; r < nfactors; ++r) {
+      accum[r] = vfirst * bv[r];
+      hada[r] = av[r] * bv[r];
+    }
 
 
     hada += nfactors;
@@ -491,7 +509,7 @@ static void p_process_slice3(
     }
 
     /* foreach nnz in fiber */
-    for(idx_t jj=start; jj < iter_end; ++jj) {
+    for(idx_t jj=start+1; jj < iter_end; ++jj) {
       val_t v;
       val_t * bv;
       if(sample == 1){

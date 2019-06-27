@@ -369,7 +369,7 @@ static void p_process_slice(
   idx_t const sample_rate = beta;
   int sample = 0;
 
-  if(mode == 2 || mode == 3){
+  if(mode == 2){
   	if(slice_size > sample_threshold) {
 	    sample = 1;
 	    /* realloc sample buffer if needed */
@@ -1132,7 +1132,7 @@ void splatt_tc_rrals(
             avg_mttkrp_time[m] += (mttkrp_time - sampling_time);
             avg_solving_time[m] += solving_time;
             
-            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // printf("  time: %lf\n", tot_time);
             // printf("  mode: %"SPLATT_PF_IDX" time: %0.3fs\n", m+1,
             //     mode_timer.seconds);
