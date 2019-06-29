@@ -338,7 +338,7 @@ static idx_t * perm_i_global[SPALS_MAX_THREADS];
 static idx_t const SEED_PADDING = 16;
 static unsigned int * sample_seeds;
 
-#define USE_LVRG_SAMPLING 1
+#define USE_LVRG_SAMPLING 0
 
 static void p_process_slice3(
     splatt_csf const * const csf,
@@ -409,12 +409,13 @@ static void p_process_slice3(
 
     if(USE_LVRG_SAMPLING){
       idx_t true_indices[3];
-      true_indices[csf->dim_perm[0]] = i;
-      true_indices[csf->dim_perm[1]] = fids[fib];
-      true_indices[csf->dim_perm[2]] = inds[fptr[fib]];
-
       val_t score;
+
       for(idx_t jj=fptr[fib]; jj < fptr[fib+1]; jj++){
+        true_indices[csf->dim_perm[0]] = i;
+        true_indices[csf->dim_perm[1]] = fids[fib];
+        true_indices[csf->dim_perm[2]] = inds[jj];
+
         score = lev_score[Modes[0]][true_indices[Modes[0]]] * lev_score[Modes[1]][true_indices[Modes[1]]];
         nnz_fib[fib - sptr[i]] += score;
       }
@@ -1482,7 +1483,7 @@ void splatt_tc_spals(
 
 
 
-            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // if(m==2)
             //   printf("  Total time: %lf\n", tottime_mode3);
             // else

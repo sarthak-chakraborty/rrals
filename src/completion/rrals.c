@@ -287,7 +287,7 @@ static void p_process_slice(
     idx_t * const nflush,
     val_t ** const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int **same,
@@ -366,7 +366,7 @@ static void p_process_slice(
     sample_threshold = (alpha/1) * nfactors;
   else
     sample_threshold = alpha * nfactors;
-  idx_t const sample_rate = beta;
+  val_t const sample_rate = beta;
   int sample = 0;
 
   if(mode == 2){
@@ -508,7 +508,7 @@ static void p_update_slice(
     int const tid,
     val_t ** const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int **same,
@@ -846,7 +846,7 @@ void splatt_tc_rrals(
     tc_model * const model,
     tc_ws * const ws,
     int alpha,
-    int beta)
+    float beta)
 {
   idx_t const nmodes = train->nmodes;
   idx_t const nfactors = model->rank;

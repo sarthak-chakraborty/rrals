@@ -185,7 +185,7 @@ void splatt_tc_rrals(
     tc_model * const model,
     tc_ws * const ws,
     int alpha,
-    int beta);
+    float beta);
 
 
 /******************************************************************************

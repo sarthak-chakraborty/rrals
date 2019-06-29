@@ -132,7 +132,7 @@ typedef struct
   idx_t nthreads;
 
   int alpha;
-  int beta;
+  float beta;
 } tc_cmd_args;
 
 
@@ -162,7 +162,7 @@ static void default_tc_opts(
   args->set_tolerance = false;
   args->num_inner = 1;
   args->alpha = 4;
-  args->beta = 100;
+  args->beta = 100.0;
 }
 
 
@@ -230,7 +230,7 @@ static error_t parse_tc_opt(
     args->alpha = atoi(arg);
     break;
   case TC_BETA:
-    args->beta = atoi(arg);
+    args->beta = atof(arg);
     break;
 
   case ARGP_KEY_ARG:
@@ -347,7 +347,7 @@ int splatt_tc_cmd(
 
   ///////////////////////////////////////////////////////////////
   int alpha = args.alpha;
-  int beta = args.beta;
+  float beta = args.beta;
   ///////////////////////////////////////////////////////////////
 
 
