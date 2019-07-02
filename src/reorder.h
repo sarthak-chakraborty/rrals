@@ -89,7 +89,7 @@ void quick_shuffle(
     idx_t * const arr,
     val_t * const weight,
     idx_t M,
-    int const N,
+    idx_t const N,
     unsigned int * seed);
 
 

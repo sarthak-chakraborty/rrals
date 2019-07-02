@@ -338,7 +338,7 @@ static idx_t * perm_i_global[SPALS_MAX_THREADS];
 static idx_t const SEED_PADDING = 16;
 static unsigned int * sample_seeds;
 
-#define USE_LVRG_SAMPLING 0
+#define USE_LVRG_SAMPLING 1
 
 static void p_process_slice3(
     splatt_csf const * const csf,
@@ -396,35 +396,46 @@ static void p_process_slice3(
   int tot_nnz = 0;
   int tot_sampled = 0;
   val_t *nnz_fib = (val_t *)malloc((sptr[i+1] - sptr[i]) * sizeof(val_t));
+  memset(nnz_fib, 0.0, (sptr[i+1] - sptr[i]));
 
-  for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-    nnz_fib[k] = 0;
+  val_t **S_pdf = (val_t **)malloc((sptr[i+1] - sptr[i]) * sizeof(val_t *));
+  for(int fib=sptr[i]; fib < sptr[i+1]; fib++){
+    S_pdf[fib - sptr[i]] = (val_t *)malloc((fptr[fib+1] - fptr[fib]) * sizeof(val_t));
+    memset(S_pdf[fib - sptr[i]], 0.0, (fptr[fib+1] - fptr[fib]));
+  }
+
+
+  idx_t true_indices[3];
+  true_indices[csf->dim_perm[0]] = i;
 
   // Sampling in fibre precalculation (Uniform sampling)
   idx_t nnz_index;
   val_t sum = 0.0;
   for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib){
+    true_indices[csf->dim_perm[1]] = fids[fib];
+
     idx_t const ntotal = fptr[fib+1] - fptr[fib];
     tot_nnz += ntotal;
 
     if(USE_LVRG_SAMPLING){
-      idx_t true_indices[3];
+      val_t score_per_fib=0.0;
       val_t score;
 
       for(idx_t jj=fptr[fib]; jj < fptr[fib+1]; jj++){
-        true_indices[csf->dim_perm[0]] = i;
-        true_indices[csf->dim_perm[1]] = fids[fib];
         true_indices[csf->dim_perm[2]] = inds[jj];
 
         score = lev_score[Modes[0]][true_indices[Modes[0]]] * lev_score[Modes[1]][true_indices[Modes[1]]];
-        nnz_fib[fib - sptr[i]] += score;
+        score_per_fib += score;
+        S_pdf[fib - sptr[i]][jj - fptr[fib]] = score;
       }
+      nnz_fib[fib - sptr[i]] = score_per_fib;
       sum += nnz_fib[fib - sptr[i]];
     }
     else
       nnz_fib[fib - sptr[i]] = ntotal;
   }
 
+  // Normalize the weights of each fibre
   if(USE_LVRG_SAMPLING){
     for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
       nnz_fib[k] /= sum;
@@ -439,7 +450,7 @@ static void p_process_slice3(
   // Distribute the # of samples to each fibre based on uniform sampling
   if(USE_LVRG_SAMPLING){
     for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-      nnz_fib[k] = nnz_fib[k] * sample_slice;
+      nnz_fib[k] = (double)(nnz_fib[k] * sample_slice);
   }
   else{
     for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
@@ -472,8 +483,12 @@ static void p_process_slice3(
       for(idx_t n=start; n < end; ++n) {
         perm_i[n-start] = n;
       }
-      idx_t sample_size = nnz_fib[fib - sptr[i]];
-      quick_shuffle(perm_i, nnz_fib, sample_size, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+
+      // printf("Index: %d\n",(fib - sptr[i]));
+      // printf("Value: %d\n", nnz_fib[fib - sptr[i]]);
+
+      idx_t sample_size = (idx_t)nnz_fib[fib - sptr[i]];
+      quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, sample_size, &(sample_seeds[tid * SEED_PADDING]));
       // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
       iter_end = start + sample_size;
     } else {
