@@ -457,47 +457,44 @@ static void p_process_slice3(
       nnz_fib[k] = (double)(nnz_fib[k] * sample_slice) / tot_nnz;
   }
 
-  // for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-    // printf("HEY: nnz_fib[%d] = %d, %d\n",k, (idx_t)nnz_fib[k], sample_slice);
 
-
+  
   /* process each fiber */
   for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
     val_t const * const restrict av = A  + (fids[fib] * nfactors);
 
-    int sample;
+    int sample = 1;
     idx_t const start = fptr[fib];
     idx_t const end = fptr[fib+1];
 
     idx_t const ntotal = fptr[fib+1] - fptr[fib];
     idx_t iter_end;
 
-    // printf("nnz_fib[%d]=%d, %d\n", (fib - sptr[i]), (idx_t)nnz_fib[fib - sptr[i]], ntotal);
 
     // Sample form each fibre
     // if(ntotal > sample_threshold) {
-      sample = 1;
+    sample = 1;
 
-      if(ntotal > perm_i_lengths[tid]) {
-        perm_i_lengths[tid] = ntotal;
-        splatt_free(perm_i_global[tid]);
-        perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
-      }
-      perm_i = perm_i_global[tid];
-      for(idx_t n=start; n < end; ++n) {
-        perm_i[n-start] = n;
-      }
+    if(ntotal > perm_i_lengths[tid]) {
+      perm_i_lengths[tid] = ntotal;
+      splatt_free(perm_i_global[tid]);
+      perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
+    }
+    perm_i = perm_i_global[tid];
+    for(idx_t n=start; n < end; ++n) {
+      perm_i[n-start] = n;
+    }
 
-      // idx_t sample_size = (idx_t)nnz_fib[fib - sptr[i]];
-      idx_t sample_size;
-      if((idx_t)nnz_fib[fib - sptr[i]] <= ntotal)
-        sample_size = (idx_t)nnz_fib[fib - sptr[i]];
-      else
-        sample_size = ntotal;
+    // idx_t sample_size = (idx_t)nnz_fib[fib - sptr[i]];
+    idx_t sample_size;
+    if((idx_t)nnz_fib[fib - sptr[i]] <= ntotal)
+      sample_size = (idx_t)nnz_fib[fib - sptr[i]];
+    else
+      sample_size = ntotal;
 
-      quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-      // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-      iter_end = start + sample_size;
+    quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+    iter_end = start + sample_size;
     // } else {
       // sample = 0;
       // iter_end = end;

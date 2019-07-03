@@ -733,7 +733,7 @@ void quick_shuffle(
 {
 
   /* shuffle perm */
-  for(int n=0; n < N-2; ++n) {
+  for(int n=0; n < N; ++n) {
      // random idx in range [n, dims[m]) 
     idx_t j = (fast_rand(seed) % (N - n)) + n;
 
