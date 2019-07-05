@@ -251,7 +251,8 @@ static void p_process_slice(
     double *sampling_time,
     double *mttkrp_time,
     double *mttkrptime,
-    double *samplingtime);
+    double *samplingtime,
+    int **aa);
 
 
 
@@ -273,7 +274,8 @@ static void p_process_tile(
     double *sampling_time,
     double *mttkrp_time,
     double *mttkrptime,
-    double *samplingtime)
+    double *samplingtime,
+    int **aa)
 {
   csf_sparsity const * const pt = csf->pt + tile;
   /* empty tile */
@@ -322,7 +324,7 @@ static void p_process_tile(
 
     /* process each fiber */
     p_process_slice(csf, tile, i, mvals, nfactors, out_row, accum, neqs,
-        mat_accum, hada_accum, &nflush, lev_score, alpha, beta, act_dense, frac_dense, tile, sampling_time, mttkrp_time, mttkrptime, samplingtime);
+        mat_accum, hada_accum, &nflush, lev_score, alpha, beta, act_dense, frac_dense, tile, sampling_time, mttkrp_time, mttkrptime, samplingtime, aa);
   } /* foreach slice */
 }
 
@@ -357,7 +359,8 @@ static void p_process_slice3(
     int beta,
     int **act,
     int **frac,
-    int mode)
+    int mode,
+    int **aa)
 {
   csf_sparsity const * const pt = csf->pt + tile;
   idx_t const * const restrict sptr = pt->fptr[0];
@@ -444,106 +447,155 @@ static void p_process_slice3(
   act[mode][i] = tot_nnz;
 
 
-  // Number of samples required from each slice
-  idx_t sample_slice = SS_MIN(tot_nnz, sample_threshold + ((tot_nnz-sample_threshold) / sample_rate));
-
-  // Distribute the # of samples to each fibre based on uniform sampling
-  if(USE_LVRG_SAMPLING){
-    for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-      nnz_fib[k] = (double)(nnz_fib[k] * sample_slice);
-  }
-  else{
-    for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-      nnz_fib[k] = (double)(nnz_fib[k] * sample_slice) / tot_nnz;
-  }
+  sum = 0.0;
+  val_t sum1=0.0;
+  int count=0;
+  // If the number of tot_nnz in  slice is more than the threshold
+  if(tot_nnz > sample_threshold){
+    // Number of samples required from each slice
+    idx_t sample_slice = SS_MIN(tot_nnz, sample_threshold + ((tot_nnz-sample_threshold) / sample_rate));
+    aa[mode][i] = sample_slice;
 
 
-  
-  /* process each fiber */
-  for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
-    val_t const * const restrict av = A  + (fids[fib] * nfactors);
-
-    int sample = 1;
-    idx_t const start = fptr[fib];
-    idx_t const end = fptr[fib+1];
-
-    idx_t const ntotal = fptr[fib+1] - fptr[fib];
-    idx_t iter_end;
-
-
-    // Sample form each fibre
-    // if(ntotal > sample_threshold) {
-    sample = 1;
-
-    if(ntotal > perm_i_lengths[tid]) {
-      perm_i_lengths[tid] = ntotal;
-      splatt_free(perm_i_global[tid]);
-      perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
-    }
-    perm_i = perm_i_global[tid];
-    for(idx_t n=start; n < end; ++n) {
-      perm_i[n-start] = n;
-    }
-
-    // idx_t sample_size = (idx_t)nnz_fib[fib - sptr[i]];
-    idx_t sample_size;
-    if((idx_t)nnz_fib[fib - sptr[i]] <= ntotal)
-      sample_size = (idx_t)nnz_fib[fib - sptr[i]];
-    else
-      sample_size = ntotal;
-
-    quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-    // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-    iter_end = start + sample_size;
-    // } else {
-      // sample = 0;
-      // iter_end = end;
-    // }
-
-    tot_sampled += iter_end - start;
-
-    /* first entry of the fiber is used to initialize accum */
-    idx_t const jjfirst  = start;
-    val_t vfirst;
-    val_t * bv;
-    if(sample == 1){
-      vfirst = vals[perm_i[jjfirst - start]];
-      bv = B + (inds[perm_i[jjfirst - start]] * nfactors);
+    // Distribute the # of samples to each fibre based on uniform sampling
+    if(USE_LVRG_SAMPLING){
+      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+        nnz_fib[k] = (int)(nnz_fib[k] * sample_slice);
     }
     else{
-      vfirst = vals[jjfirst];
-      bv = B + (inds[jjfirst] * nfactors);
-    }
-    for(idx_t r=0; r < nfactors; ++r) {
-      accum[r] = vfirst * bv[r];
-      hada[r] = av[r] * bv[r];
+      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+        nnz_fib[k] = (double)(nnz_fib[k] * sample_slice) / tot_nnz;
     }
 
+    if(mode==2 && i==0){
+      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+        sum1 += nnz_fib[k];
 
-    hada += nfactors;
-    if(++bufsize == ALS_BUFSIZE) {
-      /* add to normal equations */
-      p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
-      bufsize = 0;
-      hada = neqs_buf;
+      printf("%lf\n",sum1);
     }
+    
+    /* process each fiber */
+    for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
+      val_t const * const restrict av = A  + (fids[fib] * nfactors);
 
-    /* foreach nnz in fiber */
-    for(idx_t jj=start+1; jj < iter_end; ++jj) {
-      val_t v;
+      int sample = 1;
+      idx_t const start = fptr[fib];
+      idx_t const end = fptr[fib+1];
+
+      idx_t const ntotal = fptr[fib+1] - fptr[fib];
+      idx_t iter_end;
+
+
+      // Sample form each fibre
+      sample = 1;
+
+      if(ntotal > perm_i_lengths[tid]) {
+        perm_i_lengths[tid] = ntotal;
+        splatt_free(perm_i_global[tid]);
+        perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
+      }
+      perm_i = perm_i_global[tid];
+      for(idx_t n=start; n < end; ++n) {
+        perm_i[n-start] = n;
+      }
+
+      // int sample_size = (int)nnz_fib[fib - sptr[i]];
+
+      double sample_size;
+      if(nnz_fib[fib - sptr[i]] <= ntotal)
+        sample_size = nnz_fib[fib - sptr[i]];
+      else
+        sample_size = ntotal;
+
+      if(mode ==2 && i==0){
+        sum+=sample_size;
+      }
+
+      quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, (int)sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+      iter_end = start + sample_size;
+
+      tot_sampled += iter_end - start;
+
+      /* first entry of the fiber is used to initialize accum */
+      idx_t const jjfirst  = start;
+      val_t vfirst;
       val_t * bv;
       if(sample == 1){
-        v = vals[perm_i[jj - start]];
-        bv = B + (inds[perm_i[jj - start]] * nfactors);
+        vfirst = vals[perm_i[jjfirst - start]];
+        bv = B + (inds[perm_i[jjfirst - start]] * nfactors);
       }
       else{
-        v = vals[jj];
-        bv = B + (inds[jj] * nfactors);
+        vfirst = vals[jjfirst];
+        bv = B + (inds[jjfirst] * nfactors);
       }
-      // val_t const v = vals[jj];
-      // val_t const * const restrict bv = B + (inds[jj] * nfactors);
       for(idx_t r=0; r < nfactors; ++r) {
-        accum[r] += v * bv[r];
+        accum[r] = vfirst * bv[r];
+        hada[r] = av[r] * bv[r];
+      }
+
+
+      hada += nfactors;
+      if(++bufsize == ALS_BUFSIZE) {
+        /* add to normal equations */
+        p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+        bufsize = 0;
+        hada = neqs_buf;
+      }
+
+      /* foreach nnz in fiber */
+      for(idx_t jj=start+1; jj < iter_end; ++jj) {
+        val_t v;
+        val_t * bv;
+        if(sample == 1){
+          v = vals[perm_i[jj - start]];
+          bv = B + (inds[perm_i[jj - start]] * nfactors);
+        }
+        else{
+          v = vals[jj];
+          bv = B + (inds[jj] * nfactors);
+        }
+        // val_t const v = vals[jj];
+        // val_t const * const restrict bv = B + (inds[jj] * nfactors);
+        for(idx_t r=0; r < nfactors; ++r) {
+          accum[r] += v * bv[r];
+          hada[r] = av[r] * bv[r];
+        }
+
+        hada += nfactors;
+        if(++bufsize == ALS_BUFSIZE) {
+          /* add to normal equations */
+          p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+          bufsize = 0;
+          hada = neqs_buf;
+        }
+      }
+
+      /* accumulate into output row */
+      for(idx_t r=0; r < nfactors; ++r) {
+        out_row[r] += accum[r] * av[r];
+      }
+
+    } /* foreach fiber */
+  }
+  else{
+    aa[mode][i] = tot_nnz;
+
+    for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
+      tot_sampled += fptr[fib+1] - fptr[fib];
+
+      // if(mode ==2 && i==0){
+      //   sum += tot_sampled;
+      // }
+
+      val_t const * const restrict av = A  + (fids[fib] * nfactors);
+
+      /* first entry of the fiber is used to initialize accum */
+      idx_t const jjfirst  = fptr[fib];
+      val_t const vfirst   = vals[jjfirst];
+      val_t const * const restrict bv = B + (inds[jjfirst] * nfactors);
+      for(idx_t r=0; r < nfactors; ++r) {
+        accum[r] = vfirst * bv[r];
         hada[r] = av[r] * bv[r];
       }
 
@@ -554,14 +606,36 @@ static void p_process_slice3(
         bufsize = 0;
         hada = neqs_buf;
       }
-    }
 
-    /* accumulate into output row */
-    for(idx_t r=0; r < nfactors; ++r) {
-      out_row[r] += accum[r] * av[r];
-    }
+      /* foreach nnz in fiber */
+      for(idx_t jj=fptr[fib]+1; jj < fptr[fib+1]; ++jj) {
+        val_t const v = vals[jj];
+        val_t const * const restrict bv = B + (inds[jj] * nfactors);
+        for(idx_t r=0; r < nfactors; ++r) {
+          accum[r] += v * bv[r];
+          hada[r] = av[r] * bv[r];
+        }
 
-  } /* foreach fiber */
+        hada += nfactors;
+        if(++bufsize == ALS_BUFSIZE) {
+          /* add to normal equations */
+          p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+          bufsize = 0;
+          hada = neqs_buf;
+        }
+      }
+
+      /* accumulate into output row */
+      for(idx_t r=0; r < nfactors; ++r) {
+        out_row[r] += accum[r] * av[r];
+      }
+
+    } /* foreach fiber */
+  }
+
+  if(mode==2 && i==0){
+    printf("%lf\n", sum);
+  }
 
     frac[mode][i] = tot_sampled;
 
@@ -613,16 +687,10 @@ static void p_process_slice(
     double *sampling_time,
     double *mttkrp_time,
     double *mttkrptime,
-    double *samplingtime)
+    double *samplingtime,
+    int **aa)
 {
   struct timeval start_t, start_tt, stop_t, stop_tt;
-  // idx_t sample_threshold;
-  // if(mode == 0)
-  //   sample_threshold = 4 * nfactors;
-  // else if(mode == 1)
-  //   sample_threshold = 0.5 * nfactors;
-  // else if(mode == 2)
-  //   sample_threshold = 0.01 * nfactors;
 
   idx_t const sample_threshold = alpha * nfactors;
   idx_t const sample_rate = beta;
@@ -637,7 +705,7 @@ static void p_process_slice(
 #if USE_3MODE_OPT
   if(nmodes == 3) {
     p_process_slice3(csf, tile, i, mvals[1], mvals[2], nfactors, out_row,
-        accum, neqs, neqs_buf, nflush, lev_score, alpha, beta, act, frac, mode);
+        accum, neqs, neqs_buf, nflush, lev_score, alpha, beta, act, frac, mode, aa);
     return;
   }
 #endif
@@ -650,17 +718,6 @@ static void p_process_slice(
 
   idx_t bufsize = 0;
   val_t * hada = neqs_buf;
-
-
-  // // Mode which must be chosen to compute MTTKRP
-  // idx_t *Modes = (idx_t *)malloc((nmodes-1)*sizeof(idx_t));
-  // int k=0;
-  // for(int m=0; m<nmodes; m++){
-  //   if(mode == m)
-  //     continue;
-  //   Modes[k++] = m;
-  // }
-
 
 
   gettimeofday(&start_tt, NULL);
@@ -850,7 +907,8 @@ static void p_update_slice(
     double *mttkrp_time,
     double *mttkrptime,
     double *solvingtime,
-    double *samplingtime)
+    double *samplingtime,
+    int **aa)
 {
   struct timeval start, stop;
   double time_diff;
@@ -900,7 +958,7 @@ static void p_update_slice(
 
   /* do MTTKRP + dsyrk */
   p_process_slice(csf, 0, i, mats, nfactors, out_row, accum, neqs, mat_accum,
-      hada_accum, &nflush, lev_score, alpha, beta, act, frac, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime);
+      hada_accum, &nflush, lev_score, alpha, beta, act, frac, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime, aa);
 
 
   /* add regularization to the diagonal */
@@ -947,7 +1005,8 @@ static void p_densemode_als_update(
     double *mttkrp_time,
     double *mttkrptime,
     double *solvingtime,
-    double *samplingtime)
+    double *samplingtime,
+    int **aa)
 {
 
   struct timeval start, stop;
@@ -993,7 +1052,7 @@ static void p_densemode_als_update(
   /* update each tile in parallel */
   #pragma omp for schedule(dynamic, 1)
   for(idx_t tile=0; tile < csf[m].ntiles; ++tile) {
-    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, lev_score, alpha, beta, act, frac, act_dense, frac_dense, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime);
+    p_process_tile(csf+m, tile, model, ws, thd_densefactors, tid, lev_score, alpha, beta, act, frac, act_dense, frac_dense, mode, sampling_time, mttkrp_time, mttkrptime, samplingtime, aa);
   }
 
   for(int tile=0; tile < csf[m].ntiles; tile++){
@@ -1422,6 +1481,7 @@ void splatt_tc_spals(
   FILE *f_act = fopen("Actual.csv", "w");
   FILE *f_frac = fopen("Fraction.csv", "w");
   FILE *f_time = fopen("Time.csv", "w");
+  FILE *f_a = fopen("A.csv", "w");
 
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
@@ -1437,6 +1497,11 @@ void splatt_tc_spals(
   double **time_slice = (double **)malloc(nmodes*sizeof(double *));
   for(int i=0; i<nmodes; i++){
     time_slice[i] = (double *)malloc((model->dims[i])*sizeof(double));
+  }
+
+  int **aa = (int **)malloc(nmodes*sizeof(int *));
+  for(int i=0; i<nmodes; i++){
+    aa[i] = (int *)malloc((model->dims[i])*sizeof(int));
   }
 
 
@@ -1504,7 +1569,7 @@ void splatt_tc_spals(
           for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime);
+            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime, aa);
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
@@ -1528,14 +1593,16 @@ void splatt_tc_spals(
               tot_frac += frac[m][i];
               tot_time += time_slice[m][i];
 
-              // fprintf(f_frac, "%d,", frac[m][i]);
-              // fprintf(f_act, "%d,", act[m][i]);
+              fprintf(f_frac, "%d,", frac[m][i]);
+              fprintf(f_act, "%d,", act[m][i]);
               // fprintf(f_time, "%lf,", time_slice[m][i]);
+              fprintf(f_a, "%d,", aa[m][i]);
             }
 
-            // fprintf(f_frac, "\n");
-            // fprintf(f_act, "\n");
+            fprintf(f_frac, "\n");
+            fprintf(f_act, "\n");
             // fprintf(f_time, "\n");
+            fprintf(f_a, "\n");
 
             avg_tot_time[m] += (double)mode_timer.seconds;
             avg_sampling_time[m] += sampling_time;
