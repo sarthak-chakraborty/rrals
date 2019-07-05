@@ -338,7 +338,7 @@ static idx_t * perm_i_global[SPALS_MAX_THREADS];
 static idx_t const SEED_PADDING = 16;
 static unsigned int * sample_seeds;
 
-#define USE_LVRG_SAMPLING 0
+#define USE_LVRG_SAMPLING 1
 
 static void p_process_slice3(
     splatt_csf const * const csf,
@@ -1093,14 +1093,56 @@ static void GramInv(val_t *A, idx_t N){
 
 
 
-static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
-  for (int i=0; i<nrows; ++i){
-    for (int j1=0; j1<rank; j1++){
-      for (int j2=0; j2<rank; j2++){
-        lev_score[factor][i] += A[i*rank + j1] * gram[j1*rank + j2] * A[i*rank + j2];
-      }
+// static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
+//   for (int i=0; i<nrows; ++i){
+//     for (int j1=0; j1<rank; j1++){
+//       for (int j2=0; j2<rank; j2++){
+//         lev_score[factor][i] += A[i*rank + j1] * gram[j1*rank + j2] * A[i*rank + j2];
+//       }
+//     }
+//   }
+// }
+
+
+static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
+  char jobu = 'S';
+  char jobvt = 'N';
+  int m = (int)nrows;
+  int n = (int)rank;
+  int lda = m;
+  int ldu = m;
+  int ldvt = n;
+  double *S = (double *)malloc(n * sizeof(double));
+  double *U = (double *)malloc((ldu*n) * sizeof(double));
+  double *VT;
+  int lwork = -1;
+  double wkopt;
+  double *work;
+  int info;
+
+  double *a = (double *)malloc((nrows*rank) * sizeof(double));
+  for(int i=0; i<nrows*rank; i++)
+    a[i] = A[i];
+
+  // Query and allocate appropriate workspace
+  dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, &wkopt, &lwork, &info);
+  if(info)
+    printf("info return %d\n",info);
+    lwork = (int)wkopt;
+    work = (double *)malloc(lwork*sizeof(double));
+
+    /* Compute SVD */
+    dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, work, &lwork, &info);
+    if(info)
+    printf("info return %d\n",info);
+
+    for(int i=0; i<nrows; i++){
+      val_t sum = 0.0;
+      for(int j=0; j<rank; j++)
+        sum += U[i + j*nrows] * U[i + j*nrows];
+      sum = sqrt((double)sum);
+      lev_score[factor][i] = sum;
     }
-  }
 }
 
 
@@ -1430,10 +1472,10 @@ void splatt_tc_spals(
     count++;
 
     for(int i=0; i<nmodes; i++){
-      val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
-      GramInv(gram, model->rank);
+      // val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
+      // GramInv(gram, model->rank);
 
-      getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
+      getLvrgScore(model->factors[i], lev_score, model->rank, model->dims[i], i);
     }
 
     #pragma omp parallel
@@ -1502,7 +1544,7 @@ void splatt_tc_spals(
 
 
 
-            // printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
+            printf("  mode: %"SPLATT_PF_IDX" act: %lld     sampled: %lld    percent: %0.3f\n", m+1, tot_act, tot_frac, ((float)tot_frac)/tot_act);
             // if(m==2)
             //   printf("  Total time: %lf\n", tottime_mode3);
             // else

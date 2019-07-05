@@ -364,12 +364,14 @@ static void p_process_slice(
   idx_t sample_threshold;
   if(mode == 0)
     sample_threshold = (alpha/1) * nfactors;
+  else if(mode == 2)
+  	sample_threshold = alpha * nfactors;
   else
     sample_threshold = alpha * nfactors;
   val_t const sample_rate = beta;
   int sample = 0;
 
-  if(mode == 2){
+  // if(mode == 1){
   	if(slice_size > sample_threshold) {
 	    sample = 1;
 	    /* realloc sample buffer if needed */
@@ -398,7 +400,7 @@ static void p_process_slice(
 	  }
 	  gettimeofday(&stop_t, NULL);
 	  *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
-  }
+  // }
   
 
   /* store diagnostics */
@@ -687,40 +689,153 @@ static val_t *getGram(val_t *A, idx_t nrows, idx_t rank){
   }
 
   return gram;
+
+
+  // val_t *gram = (val_t *)malloc((rank*rank) * sizeof(val_t));
+
+  // for(int i=0; i<rank; i++)
+  //   for(int j=0; j<nrows; j++)
+  //     for(int k=0; k<rank; k++)
+  //     	gram[i*rank + k] += A[j*rank + i] * A[j*rank + k];
+  
+
+  // return gram;
+
+  // val_t *gram = (val_t *)malloc((rank*rank) * sizeof(val_t));
+
+  // val_t sum;
+  // for(int i=0; i<rank; i++){
+  //   for(int j=0; j<rank; j++){
+  //     sum = 0;
+  //     for(int k=0; k<nrows; k++){
+  //       sum += A[i*nrows + k]*A[j*nrows + k];
+  //     }
+  //     gram[j + i*rank] = sum;
+  //   }
+  // }
+
+  // return gram;
 }
 
-// extern 'C' {
-//     // LU decomoposition of a general matrix
-//     void dgetrf_(int* M, int *N, double* A, int* lda, int* IPIV, int* INFO);
-
-//     // generate inverse of a matrix given its LU decomposition
-//     void dgetri_(int* N, double* A, int* lda, int* IPIV, double* WORK, int* lwork, int* INFO);
-// }
 
 static val_t *GramInv(val_t *A, idx_t N){
-  int *IPIV = (int *)malloc((N+1) * sizeof(int));
-  int LWORK = N*N;
-  double *WORK = (double *)malloc(LWORK * sizeof(double));
-  int INFO;
+  // int *IPIV = (int *)malloc((N+1) * sizeof(int));
+  // int LWORK = N*N;
+  // double *WORK = (double *)malloc(LWORK * sizeof(double));
+  // int INFO;
 
-  dgetrf_(&N,&N,A,&N,IPIV,&INFO);
-  dgetri_(&N,A,&N,IPIV,WORK,&LWORK,&INFO);
+  char uplo = 'L';
+  int order = (int)N;
+  int lda = (int)N;
+  int info;
 
-  free(IPIV);
-  free(WORK);
+  LAPACK_DPOTRF(&uplo, &order, A, &lda, &info);
+  // if(info){
+  // 	printf("info dpotrf = %d\n", info);
+  // }
+
+  dpotri_(&uplo, &order, A, &lda, &info);
+  // if(info){
+  // 	printf("info dpotri = %d\n", info);
+  // }
+  // dgetrf_(&N,&N,A,&N,IPIV,&INFO);
+  // if(INFO != 0)
+  // 	printf("INFO after dgetrf = %d\n",INFO);
+
+  // dgetri_(&N,A,&N,IPIV,WORK,&LWORK,&INFO);
+  // if(INFO != 0)
+  // 	printf("INFO after dgetri = %d\n",INFO);
+
+  // free(IPIV);
+  // free(WORK);
 
   return A;
 }
 
 
-static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
-  for (int i=0; i<nrows; ++i){
-    for (int j1=0; j1<rank; j1++){
-      for (int j2=0; j2<rank; j2++){
-        lev_score[factor][i] += A[i*rank + j1] * gram[j1*rank + j2] * A[i*rank + j2];
-      }
+// static void getLvrgScore(val_t *A, val_t *gram, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
+// 	// double * I = (double *)malloc((nrows*rank) * sizeof(double));
+// 	// // double * J = (double *)malloc((nrows*nrows) * sizeof(double));
+
+// 	// val_t sum = 0.0;
+// 	// for(int i=0; i<nrows; i++){
+// 	// 	for(int j=0; j<rank; j++){
+// 	// 		for(int k=0; k<rank; k++)
+// 	// 			sum += A[i*rank + k] * gram[k*rank + j];
+
+// 	// 		I[i*rank + j] = (double)sum;
+// 	// 		sum = 0.0;
+// 	// 	}
+// 	// }
+
+// 	// sum = 0.0;
+// 	// for(int i=0; i<nrows; i++){
+// 	// 	// for(int j=0; j<nrows; j++){
+// 	// 		for(int k=0; k<rank; k++)
+// 	// 			sum += I[i*rank + k] * A[i*rank + k];
+
+// 	// 		lev_score[factor][i] = sum;
+// 	// 		// J[i*nrows + j] = (double)sum;
+// 	// 		sum = 0.0;
+// 	// 	// }
+// 	// }
+
+// 	//  // for(int i=0; i<nrows; i++)
+// 	//  // 	lev_score[factor][i] = J[i*nrows + i];
+
+// 	// free(I);
+// 	// // free(J); 
+
+//   for (int i=0; i<nrows; ++i){
+//     for (int j1=0; j1<rank; j1++){
+//       for (int j2=0; j2<rank; j2++){
+//         lev_score[factor][i] += A[i*rank + j1] * gram[j1*rank + j2] * A[i*rank + j2];
+//       }
+//     }
+//   }
+// }
+
+
+
+static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
+	char jobu = 'S';
+	char jobvt = 'N';
+	int m = (int)nrows;
+	int n = (int)rank;
+	int lda = m;
+	int ldu = m;
+	int ldvt = n;
+	double *S = (double *)malloc(n * sizeof(double));
+	double *U = (double *)malloc((ldu*n) * sizeof(double));
+	double *VT;
+	int lwork = -1;
+	double wkopt;
+	double *work;
+	int info;
+
+	double *a = (double *)malloc((nrows*rank) * sizeof(double));
+	for(int i=0; i<nrows*rank; i++)
+		a[i] = A[i];
+
+	// Query and allocate appropriate workspace
+	dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, &wkopt, &lwork, &info);
+	if(info)
+		printf("info return %d\n",info);
+    lwork = (int)wkopt;
+    work = (double *)malloc(lwork*sizeof(double));
+
+    /* Compute SVD */
+    dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, work, &lwork, &info);
+    if(info)
+		printf("info return %d\n",info);
+
+    for(int i=0; i<nrows; i++){
+    	val_t sum = 0.0;
+    	for(int j=0; j<rank; j++)
+    		sum += U[i + j*nrows] * U[i + j*nrows];
+    	sum = sqrt((double)sum);
+    	lev_score[factor][i] = sum;
     }
-  }
 }
 
 
@@ -1004,6 +1119,7 @@ void splatt_tc_rrals(
   FILE *f_act = fopen("Actual.csv", "w");
   FILE *f_frac = fopen("Fraction.csv", "w");
   FILE *f_time = fopen("Time.csv", "w");
+  FILE *f_lev = fopen("Leverage.csv", "w");
   // FILE *f_same = fopen("Same.csv", "w");
 
   int **act = (int **)malloc(nmodes*sizeof(int *));
@@ -1052,10 +1168,10 @@ void splatt_tc_rrals(
 
     timer_fstart(&gram_timer);
     for(int i=0; i<nmodes; i++){
-      val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
-      gram = GramInv(gram, model->rank);
+      // val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
+      // gram = GramInv(gram, model->rank);
 
-      getLvrgScore(model->factors[i], gram, lev_score, model->rank, model->dims[i], i);
+      getLvrgScore(model->factors[i], lev_score, model->rank, model->dims[i], i);
     }
     timer_stop(&gram_timer);
     avg_gram_time += gram_timer.seconds;
@@ -1107,7 +1223,7 @@ void splatt_tc_rrals(
             long long int tot_act = 0;
             long long int tot_frac = 0;
             double tot_time = 0.0;
-            long long int tot_same = 0;
+            // long long int tot_same = 0;
             for(int i=0; i<scoo->dims[m]; i++){
               tot_act += act[m][i];
               tot_frac += frac[m][i];
@@ -1117,12 +1233,14 @@ void splatt_tc_rrals(
               fprintf(f_frac, "%d,", frac[m][i]);
               fprintf(f_act, "%d,", act[m][i]);
               fprintf(f_time, "%lf,", time_slice[m][i]);
+              fprintf(f_lev, "%lf,", lev_score[m][i]);
               // fprintf(f_same, "%d\n", same[m][i]);
             }
 
             fprintf(f_frac, "\n");
             fprintf(f_act, "\n");
             fprintf(f_time, "\n");
+            fprintf(f_lev, "\n");
             // fprintf(f_same, "\n");
 
             // printf(" Sampled:%lld 	Same sampled: %lld 	percent:%0.3f\n", tot_frac, tot_same, ((float)tot_same)/tot_frac);
