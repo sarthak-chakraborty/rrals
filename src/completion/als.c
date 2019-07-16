@@ -707,6 +707,49 @@ static void p_densemode_als_update(
 }
 
 
+static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, int factor){
+  char jobu = 'S';
+  char jobvt = 'N';
+  int m = (int)nrows;
+  int n = (int)rank;
+  int lda = m;
+  int ldu = m;
+  int ldvt = n;
+  double *S = (double *)malloc(n * sizeof(double));
+  double *U = (double *)malloc((ldu*n) * sizeof(double));
+  double *VT;
+  int lwork = -1;
+  double wkopt;
+  double *work;
+  int info;
+
+  double *a = (double *)malloc((nrows*rank) * sizeof(double));
+  for(int i=0; i<nrows; i++)
+    for(int j=0; j<rank; j++)
+      a[j*nrows + i] = A[i*rank + j];
+
+  // Query and allocate appropriate workspace
+  dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, &wkopt, &lwork, &info);
+  if(info)
+    printf("info return %d\n",info);
+    lwork = (int)wkopt;
+    work = (double *)malloc(lwork*sizeof(double));
+
+    /* Compute SVD */
+    dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, work, &lwork, &info);
+    if(info)
+    printf("info return %d\n",info);
+
+    for(int i=0; i<m; i++){
+      val_t sum = 0.0;
+      for(int j=0; j<n; j++)
+        sum += U[i + j*ldu] * U[i + j*ldu];
+      sum = sqrt((double)sum);
+      lev_score[factor][i] = sum;
+    }
+}
+
+
 
 #ifdef SPLATT_USE_MPI
 
@@ -971,14 +1014,23 @@ void splatt_tc_als(
   double avg_tot_time[3] = {0.0, 0.0, 0.0};
   int count=0;
 
+  FILE *f_lev = fopen("Leverage_als.csv", "w");
+
 
   sp_timer_t mode_timer;
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
+  val_t **lev_score = (val_t **)malloc(nmodes * sizeof(val_t *));
+  for(int i=0; i<nmodes; i++)
+    lev_score[i] = (val_t *)malloc((model->dims[i])*sizeof(val_t));
 
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
+
+    for(int i=0; i<nmodes; i++)
+      getLvrgScore(model->factors[i], lev_score, model->rank, model->dims[i], i);
+
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
@@ -1011,6 +1063,10 @@ void splatt_tc_als(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
+            for(int i=0; i<model->dims[m]; i++)
+              fprintf(f_lev, "%lf,", lev_score[m][i]);
+            fprintf(f_lev, "\n");
+
             avg_tot_time[m] += (double)mode_timer.seconds;
             avg_mttkrp_time[m] += mttkrp_time;
             avg_solving_time[m] += solving_time;

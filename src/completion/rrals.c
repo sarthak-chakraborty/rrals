@@ -362,16 +362,22 @@ static void p_process_slice(
 
   gettimeofday(&start_t, NULL);
   idx_t sample_threshold;
-  if(mode == 0)
-    sample_threshold = (alpha/1) * nfactors;
-  else if(mode == 2)
-  	sample_threshold = alpha * nfactors;
-  else
+  val_t sample_rate;
+  if(mode == 0){
     sample_threshold = alpha * nfactors;
-  val_t const sample_rate = beta;
+    sample_rate = beta;
+	}
+  else if(mode == 2){
+  	sample_threshold = alpha * nfactors;
+  	sample_rate = beta;
+  }
+  else{
+    sample_threshold = alpha * nfactors;
+  	sample_rate = beta;
+  }
   int sample = 0;
 
-  // if(mode == 1){
+  if(mode == 1 || mode == 2){
   	if(slice_size > sample_threshold) {
 	    sample = 1;
 	    /* realloc sample buffer if needed */
@@ -400,7 +406,7 @@ static void p_process_slice(
 	  }
 	  gettimeofday(&stop_t, NULL);
 	  *sampling_time += (stop_t.tv_sec + stop_t.tv_usec/1000000.0)- (start_t.tv_sec + start_t.tv_usec/1000000.0);
-  // }
+  }
   
 
   /* store diagnostics */
@@ -806,7 +812,7 @@ static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, 
 	int ldu = m;
 	int ldvt = n;
 	double *S = (double *)malloc(n * sizeof(double));
-	double *U = (double *)malloc((ldu*n) * sizeof(double));
+	double *U = (double *)malloc((ldu*m) * sizeof(double));
 	double *VT;
 	int lwork = -1;
 	double wkopt;
@@ -814,28 +820,108 @@ static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, 
 	int info;
 
 	double *a = (double *)malloc((nrows*rank) * sizeof(double));
-	for(int i=0; i<nrows*rank; i++)
-		a[i] = A[i];
+	for(int i=0; i<nrows; i++)
+    	for(int j=0; j<rank; j++)
+		  a[j*nrows + i] = A[i*rank + j];
+
 
 	// Query and allocate appropriate workspace
 	dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, &wkopt, &lwork, &info);
 	if(info)
 		printf("info return %d\n",info);
-    lwork = (int)wkopt;
-    work = (double *)malloc(lwork*sizeof(double));
+  lwork = (int)wkopt;
+  work = (double *)malloc(lwork*sizeof(double));
 
-    /* Compute SVD */
-    dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, work, &lwork, &info);
-    if(info)
-		printf("info return %d\n",info);
+  /* Compute SVD */
+  dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, work, &lwork, &info);
+  if(info)
+	  printf("info return %d\n",info);
 
-    for(int i=0; i<nrows; i++){
-    	val_t sum = 0.0;
-    	for(int j=0; j<rank; j++)
-    		sum += U[i + j*nrows] * U[i + j*nrows];
-    	sum = sqrt((double)sum);
-    	lev_score[factor][i] = sum;
+
+  for(int i=0; i<m; i++){
+  	val_t sum = 0.0;
+  	for(int j=0; j<n; j++)
+  		sum += U[i + j*ldu] * U[i + j*ldu];
+  	sum = sqrt((double)sum);
+  	lev_score[factor][i] = sum;
+  }
+}
+
+
+void qcksort_s(idx_t * a, idx_t start, idx_t end){
+  idx_t i, j, pivot, temp;
+
+  if((int)start < (int)end){
+	pivot = start;
+	i = start;
+	j = end;
+
+	while(i<j){
+		while(a[i] <= a[pivot] && i < end)
+			i++;
+		while(a[j] > a[pivot])
+			j--;
+		if(i<j){
+			temp = a[i];
+			a[i] = a[j];
+			a[j] = temp;
+		}
+	}
+
+	temp = a[pivot];
+	a[pivot] = a[j];
+	a[j] = temp;
+
+	qcksort_s(a, start, j-1);
+	qcksort_s(a, j+1, end);
+  }
+}
+
+
+idx_t * reservoir_sample_s(
+    val_t * const weight,
+    idx_t M,
+    idx_t const N)
+{
+
+  double * key = (double *)malloc(N * sizeof(double));
+  idx_t * a = (idx_t *)malloc(N * sizeof(idx_t));
+  val_t min_key = 32767;
+  idx_t pos = 0;
+  for(int i=0; i<N; i++){
+    double j = (double)rand() / RAND_MAX;
+    a[i] = i;
+    key[i] = pow(j, (1.0/(weight[i]+0.01)));
+    if(key[i] < min_key){
+      min_key = key[i];
+      pos = i;
     }
+  }
+
+  val_t new_key;
+  for(int i=N; i<M; i++){
+    double j = (double)rand() / RAND_MAX;
+    new_key = pow(j, (1.0/(double)weight[i]));
+    if(new_key > min_key){
+      a[pos] = i;
+
+      key[pos] = new_key;
+
+      min_key = new_key;
+      for(int k=0; k<N; k++){
+        if(key[k] < min_key){
+          min_key = key[k];
+          pos = k;
+        }
+      }
+    }
+  }
+
+  free(key);
+
+  if(N != 0)
+    qcksort_s(a, 0, N-1);
+  return a;
 }
 
 
@@ -1166,6 +1252,13 @@ void splatt_tc_rrals(
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
 
+    for(int i=0; i<nmodes; i++){
+    	for(int j=0; j<scoo->dims[i]; j++){
+    		act[i][j] = 0;
+    		frac[i][j] = 0;
+    	}
+    }
+
     timer_fstart(&gram_timer);
     for(int i=0; i<nmodes; i++){
       // val_t *gram = getGram(model->factors[i], model->dims[i], model->rank);
@@ -1175,6 +1268,11 @@ void splatt_tc_rrals(
     }
     timer_stop(&gram_timer);
     avg_gram_time += gram_timer.seconds;
+
+    idx_t mode_a_size = 0.3 * model->dims[0];
+    idx_t * imp_a = (idx_t *)malloc(mode_a_size * sizeof(idx_t));
+    imp_a = reservoir_sample_s(lev_score[0], model->dims[0], mode_a_size);
+    idx_t counter = 0;
 
 
     #pragma omp parallel
@@ -1204,7 +1302,22 @@ void splatt_tc_rrals(
           for(idx_t i=0; i < scoo->dims[m]; ++i)  {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, same, &solving_time, &sampling_time, &mttkrp_time);
+            if(m == 0){
+            	if(i == imp_a[counter])
+            		p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, same, &solving_time, &sampling_time, &mttkrp_time);
+            	else if(i > imp_a[counter]){
+            		for(idx_t xx = counter; xx < mode_a_size; xx++){
+            			if(imp_a[xx] >= i){
+            				counter = xx;
+            				break;
+            			}
+            		}
+            		if(i == imp_a[counter])
+            			p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, same, &solving_time, &sampling_time, &mttkrp_time);
+            	}
+            }
+            else
+            	p_update_slice(scoo, m, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, same, &solving_time, &sampling_time, &mttkrp_time);
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }

@@ -244,7 +244,7 @@ static void p_process_slice(
     idx_t * const nflush,
     val_t **const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int mode,
@@ -265,7 +265,7 @@ static void p_process_tile(
     int const tid,
     val_t **const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int **act_dense,
@@ -356,7 +356,7 @@ static void p_process_slice3(
     idx_t * const nflush,
     val_t ** const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int mode,
@@ -371,7 +371,8 @@ static void p_process_slice3(
   idx_t const nmodes = csf->nmodes;
 
   idx_t const sample_threshold = alpha * nfactors;
-  idx_t const sample_rate = beta;
+  val_t const sample_rate = beta;
+
 
   int const tid = splatt_omp_get_thread_num();
   idx_t * perm_i = NULL;
@@ -411,154 +412,180 @@ static void p_process_slice3(
   idx_t true_indices[3];
   true_indices[csf->dim_perm[0]] = i;
 
-  // Sampling in fibre precalculation (Uniform sampling)
-  idx_t nnz_index;
-  val_t sum = 0.0;
-  for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib){
-    true_indices[csf->dim_perm[1]] = fids[fib];
+  if(mode == 2){
+    // Sampling in fibre precalculation (Uniform sampling)
+    idx_t nnz_index;
+    val_t sum = 0.0;
+    for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib){
+      true_indices[csf->dim_perm[1]] = fids[fib];
 
-    idx_t const ntotal = fptr[fib+1] - fptr[fib];
-    tot_nnz += ntotal;
+      idx_t const ntotal = fptr[fib+1] - fptr[fib];
+      tot_nnz += ntotal;
 
-    if(USE_LVRG_SAMPLING){
-      val_t score_per_fib=0.0;
-      val_t score;
+      if(USE_LVRG_SAMPLING){
+        val_t score_per_fib=0.0;
+        val_t score;
 
-      for(idx_t jj=fptr[fib]; jj < fptr[fib+1]; jj++){
-        true_indices[csf->dim_perm[2]] = inds[jj];
+        for(idx_t jj=fptr[fib]; jj < fptr[fib+1]; jj++){
+          true_indices[csf->dim_perm[2]] = inds[jj];
 
-        score = lev_score[Modes[0]][true_indices[Modes[0]]] * lev_score[Modes[1]][true_indices[Modes[1]]];
-        score_per_fib += score;
-        S_pdf[fib - sptr[i]][jj - fptr[fib]] = score;
+          score = lev_score[Modes[0]][true_indices[Modes[0]]] * lev_score[Modes[1]][true_indices[Modes[1]]];
+          score_per_fib += score;
+          S_pdf[fib - sptr[i]][jj - fptr[fib]] = score;
+        }
+        nnz_fib[fib - sptr[i]] = score_per_fib;
+        sum += nnz_fib[fib - sptr[i]];
       }
-      nnz_fib[fib - sptr[i]] = score_per_fib;
-      sum += nnz_fib[fib - sptr[i]];
+      else
+        nnz_fib[fib - sptr[i]] = ntotal;
     }
-    else
-      nnz_fib[fib - sptr[i]] = ntotal;
-  }
 
-  // Normalize the weights of each fibre
-  if(USE_LVRG_SAMPLING){
-    for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-      nnz_fib[k] /= sum;
+    // Normalize the weights of each fibre
+    if(USE_LVRG_SAMPLING){
+      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+        nnz_fib[k] /= sum;
+    }
   }
 
   act[mode][i] = tot_nnz;
 
 
-  sum = 0.0;
-  val_t sum1=0.0;
   int count=0;
-  // If the number of tot_nnz in  slice is more than the threshold
-  if(tot_nnz > sample_threshold){
-    // Number of samples required from each slice
-    idx_t sample_slice = SS_MIN(tot_nnz, sample_threshold + ((tot_nnz-sample_threshold) / sample_rate));
-    aa[mode][i] = sample_slice;
+  if(mode == 2){
+    // If the number of tot_nnz in  slice is more than the threshold
+    if(tot_nnz > sample_threshold){
+      // Number of samples required from each slice
+      idx_t sample_slice = SS_MIN(tot_nnz, sample_threshold + ((tot_nnz-sample_threshold) / sample_rate));
+      aa[mode][i] = sample_slice;
 
 
-    // Distribute the # of samples to each fibre based on uniform sampling
-    if(USE_LVRG_SAMPLING){
-      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-        nnz_fib[k] = (int)(nnz_fib[k] * sample_slice);
-    }
-    else{
-      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-        nnz_fib[k] = (double)(nnz_fib[k] * sample_slice) / tot_nnz;
-    }
-
-    if(mode==2 && i==0){
-      for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
-        sum1 += nnz_fib[k];
-
-      printf("%lf\n",sum1);
-    }
-    
-    /* process each fiber */
-    for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
-      val_t const * const restrict av = A  + (fids[fib] * nfactors);
-
-      int sample = 1;
-      idx_t const start = fptr[fib];
-      idx_t const end = fptr[fib+1];
-
-      idx_t const ntotal = fptr[fib+1] - fptr[fib];
-      idx_t iter_end;
-
-
-      // Sample form each fibre
-      sample = 1;
-
-      if(ntotal > perm_i_lengths[tid]) {
-        perm_i_lengths[tid] = ntotal;
-        splatt_free(perm_i_global[tid]);
-        perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
-      }
-      perm_i = perm_i_global[tid];
-      for(idx_t n=start; n < end; ++n) {
-        perm_i[n-start] = n;
-      }
-
-      // int sample_size = (int)nnz_fib[fib - sptr[i]];
-
-      double sample_size;
-      if(nnz_fib[fib - sptr[i]] <= ntotal)
-        sample_size = nnz_fib[fib - sptr[i]];
-      else
-        sample_size = ntotal;
-
-      if(mode ==2 && i==0){
-        sum+=sample_size;
-      }
-
-      quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, (int)sample_size, &(sample_seeds[tid * SEED_PADDING]));
-      // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
-      iter_end = start + sample_size;
-
-      tot_sampled += iter_end - start;
-
-      /* first entry of the fiber is used to initialize accum */
-      idx_t const jjfirst  = start;
-      val_t vfirst;
-      val_t * bv;
-      if(sample == 1){
-        vfirst = vals[perm_i[jjfirst - start]];
-        bv = B + (inds[perm_i[jjfirst - start]] * nfactors);
+      // Distribute the # of samples to each fibre based on uniform sampling
+      if(USE_LVRG_SAMPLING){
+        for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+          nnz_fib[k] = (int)((nnz_fib[k] * sample_slice) + 0.5);
       }
       else{
-        vfirst = vals[jjfirst];
-        bv = B + (inds[jjfirst] * nfactors);
-      }
-      for(idx_t r=0; r < nfactors; ++r) {
-        accum[r] = vfirst * bv[r];
-        hada[r] = av[r] * bv[r];
+        for(int k=0; k < (sptr[i+1] - sptr[i]); k++)
+          nnz_fib[k] = (double)(nnz_fib[k] * sample_slice) / tot_nnz;
       }
 
+      
+      /* process each fiber */
+      for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
+        val_t const * const restrict av = A  + (fids[fib] * nfactors);
 
-      hada += nfactors;
-      if(++bufsize == ALS_BUFSIZE) {
-        /* add to normal equations */
-        p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
-        bufsize = 0;
-        hada = neqs_buf;
-      }
+        int sample = 1;
+        idx_t const start = fptr[fib];
+        idx_t const end = fptr[fib+1];
 
-      /* foreach nnz in fiber */
-      for(idx_t jj=start+1; jj < iter_end; ++jj) {
-        val_t v;
+        idx_t const ntotal = fptr[fib+1] - fptr[fib];
+        idx_t iter_end;
+
+
+        // Sample form each fibre
+        sample = 1;
+
+        if(ntotal > perm_i_lengths[tid]) {
+          perm_i_lengths[tid] = ntotal;
+          splatt_free(perm_i_global[tid]);
+          perm_i_global[tid] = splatt_malloc(ntotal * sizeof(*perm_i_global));
+        }
+        perm_i = perm_i_global[tid];
+        for(idx_t n=start; n < end; ++n) {
+          perm_i[n-start] = n;
+        }
+
+        // int sample_size = (int)nnz_fib[fib - sptr[i]];
+
+        double sample_size;
+        if(nnz_fib[fib - sptr[i]] <= ntotal)
+          sample_size = nnz_fib[fib - sptr[i]];
+        else
+          sample_size = ntotal;
+
+
+        quick_shuffle(perm_i, S_pdf[fib - sptr[i]], ntotal, (int)sample_size, &(sample_seeds[tid * SEED_PADDING]));
+        // quick_shuffle(perm_i, sample_size, &(sample_seeds[tid * SEED_PADDING]));
+        iter_end = start + sample_size;
+
+        tot_sampled += iter_end - start;
+
+        /* first entry of the fiber is used to initialize accum */
+        idx_t const jjfirst  = start;
+        val_t vfirst;
         val_t * bv;
         if(sample == 1){
-          v = vals[perm_i[jj - start]];
-          bv = B + (inds[perm_i[jj - start]] * nfactors);
+          vfirst = vals[perm_i[jjfirst - start]];
+          bv = B + (inds[perm_i[jjfirst - start]] * nfactors);
         }
         else{
-          v = vals[jj];
-          bv = B + (inds[jj] * nfactors);
+          vfirst = vals[jjfirst];
+          bv = B + (inds[jjfirst] * nfactors);
         }
-        // val_t const v = vals[jj];
-        // val_t const * const restrict bv = B + (inds[jj] * nfactors);
         for(idx_t r=0; r < nfactors; ++r) {
-          accum[r] += v * bv[r];
+          accum[r] = vfirst * bv[r];
+          hada[r] = av[r] * bv[r];
+        }
+
+
+        hada += nfactors;
+        if(++bufsize == ALS_BUFSIZE) {
+          /* add to normal equations */
+          p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+          bufsize = 0;
+          hada = neqs_buf;
+        }
+
+        /* foreach nnz in fiber */
+        for(idx_t jj=start+1; jj < iter_end; ++jj) {
+          val_t v;
+          val_t * bv;
+          if(sample == 1){
+            v = vals[perm_i[jj - start]];
+            bv = B + (inds[perm_i[jj - start]] * nfactors);
+          }
+          else{
+            v = vals[jj];
+            bv = B + (inds[jj] * nfactors);
+          }
+          // val_t const v = vals[jj];
+          // val_t const * const restrict bv = B + (inds[jj] * nfactors);
+          for(idx_t r=0; r < nfactors; ++r) {
+            accum[r] += v * bv[r];
+            hada[r] = av[r] * bv[r];
+          }
+
+          hada += nfactors;
+          if(++bufsize == ALS_BUFSIZE) {
+            /* add to normal equations */
+            p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+            bufsize = 0;
+            hada = neqs_buf;
+          }
+        }
+
+        /* accumulate into output row */
+        for(idx_t r=0; r < nfactors; ++r) {
+          out_row[r] += accum[r] * av[r];
+        }
+
+      } /* foreach fiber */
+    }
+    else{
+      aa[mode][i] = tot_nnz;
+
+      for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
+        tot_sampled += fptr[fib+1] - fptr[fib];
+
+
+        val_t const * const restrict av = A  + (fids[fib] * nfactors);
+
+        /* first entry of the fiber is used to initialize accum */
+        idx_t const jjfirst  = fptr[fib];
+        val_t const vfirst   = vals[jjfirst];
+        val_t const * const restrict bv = B + (inds[jjfirst] * nfactors);
+        for(idx_t r=0; r < nfactors; ++r) {
+          accum[r] = vfirst * bv[r];
           hada[r] = av[r] * bv[r];
         }
 
@@ -569,14 +596,32 @@ static void p_process_slice3(
           bufsize = 0;
           hada = neqs_buf;
         }
-      }
 
-      /* accumulate into output row */
-      for(idx_t r=0; r < nfactors; ++r) {
-        out_row[r] += accum[r] * av[r];
-      }
+        /* foreach nnz in fiber */
+        for(idx_t jj=fptr[fib]+1; jj < fptr[fib+1]; ++jj) {
+          val_t const v = vals[jj];
+          val_t const * const restrict bv = B + (inds[jj] * nfactors);
+          for(idx_t r=0; r < nfactors; ++r) {
+            accum[r] += v * bv[r];
+            hada[r] = av[r] * bv[r];
+          }
 
-    } /* foreach fiber */
+          hada += nfactors;
+          if(++bufsize == ALS_BUFSIZE) {
+            /* add to normal equations */
+            p_vec_oprod(neqs_buf, nfactors, bufsize, (*nflush)++, neqs);
+            bufsize = 0;
+            hada = neqs_buf;
+          }
+        }
+
+        /* accumulate into output row */
+        for(idx_t r=0; r < nfactors; ++r) {
+          out_row[r] += accum[r] * av[r];
+        }
+
+      } /* foreach fiber */
+    }
   }
   else{
     aa[mode][i] = tot_nnz;
@@ -584,9 +629,6 @@ static void p_process_slice3(
     for(idx_t fib=sptr[i]; fib < sptr[i+1]; ++fib) {
       tot_sampled += fptr[fib+1] - fptr[fib];
 
-      // if(mode ==2 && i==0){
-      //   sum += tot_sampled;
-      // }
 
       val_t const * const restrict av = A  + (fids[fib] * nfactors);
 
@@ -633,10 +675,6 @@ static void p_process_slice3(
     } /* foreach fiber */
   }
 
-  if(mode==2 && i==0){
-    printf("%lf\n", sum);
-  }
-
     frac[mode][i] = tot_sampled;
 
     free(nnz_fib);
@@ -680,7 +718,7 @@ static void p_process_slice(
     idx_t * const nflush,
     val_t **const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int mode,
@@ -898,7 +936,7 @@ static void p_update_slice(
     int const tid,
     val_t ** const lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int mode,
@@ -996,7 +1034,7 @@ static void p_densemode_als_update(
     int const tid,
     val_t **lev_score,
     int alpha,
-    int beta,
+    float beta,
     int **act,
     int **frac,
     int mode,
@@ -1180,8 +1218,9 @@ static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, 
   int info;
 
   double *a = (double *)malloc((nrows*rank) * sizeof(double));
-  for(int i=0; i<nrows*rank; i++)
-    a[i] = A[i];
+  for(int i=0; i<nrows; i++)
+    for(int j=0; j<rank; j++)
+      a[j*nrows + i] = A[i*rank + j];
 
   // Query and allocate appropriate workspace
   dgesvd_(&jobu, &jobvt, &m, &n, a, &lda, S, U, &ldu, VT, &ldvt, &wkopt, &lwork, &info);
@@ -1195,14 +1234,89 @@ static void getLvrgScore(val_t * A, val_t **lev_score, idx_t rank, idx_t nrows, 
     if(info)
     printf("info return %d\n",info);
 
-    for(int i=0; i<nrows; i++){
+    for(int i=0; i<m; i++){
       val_t sum = 0.0;
-      for(int j=0; j<rank; j++)
-        sum += U[i + j*nrows] * U[i + j*nrows];
+      for(int j=0; j<n; j++)
+        sum += U[i + j*ldu] * U[i + j*ldu];
       sum = sqrt((double)sum);
       lev_score[factor][i] = sum;
     }
 }
+
+
+idx_t partition(idx_t * a, idx_t start, idx_t end){
+  idx_t pivot = a[end];
+  idx_t i = start - 1;
+
+  for(idx_t j = start; j < end-1; j++){
+    if(a[j] < pivot){
+      i++;
+      idx_t temp = a[i];
+      a[i] = a[j];
+      a[j] = temp;
+    }
+  }
+  idx_t temp = a[i+1];
+  a[i+1] = a[end];
+  a[end] = temp;
+
+  return (i+1);
+}
+
+void qcksort(idx_t * a, idx_t start, idx_t end){
+  if(start < end){
+    idx_t p = partition(a, start, end);
+    qcksort(a, start, p-1);
+    qcksort(a, p+1, end);
+  }
+}
+
+
+idx_t * reservoir_sample(
+    val_t * const weight,
+    idx_t M,
+    idx_t const N)
+{
+
+  double * key = (double *)malloc(N * sizeof(double));
+  idx_t * a = (idx_t *)malloc(N * sizeof(idx_t));
+  val_t min_key = 32767;
+  idx_t pos = 0;
+  for(int i=0; i<N; i++){
+    double j = (double)rand() / RAND_MAX;
+    a[i] = i;
+    key[i] = pow(j, (1.0/(weight[i]+0.01)));
+    if(key[i] < min_key){
+      min_key = key[i];
+      pos = i;
+    }
+  }
+
+  val_t new_key;
+  for(int i=N; i<M; i++){
+    double j = (double)rand() / RAND_MAX;
+    new_key = pow(j, (1.0/(double)weight[i]));
+    if(new_key > min_key){
+      a[pos] = i;
+
+      key[pos] = new_key;
+
+      min_key = new_key;
+      for(int k=0; k<N; k++){
+        if(key[k] < min_key){
+          min_key = key[k];
+          pos = k;
+        }
+      }
+    }
+  }
+
+  free(key);
+
+  qcksort(a, 0, N-1);
+  return a;
+}
+
 
 
 
@@ -1327,7 +1441,7 @@ void splatt_tc_spals(
     tc_model * const model,
     tc_ws * const ws,
     int alpha,
-    int beta)
+    float beta)
 {
   idx_t const nmodes = train->nmodes;
   idx_t const nfactors = model->rank;
@@ -1472,7 +1586,6 @@ void splatt_tc_spals(
 
 
 
-
   val_t loss = tc_loss_sq(train, model, ws);
   val_t frobsq = tc_frob_sq(model, ws);
   tc_converge(train, validate, model, loss, frobsq, 0, ws);
@@ -1543,6 +1656,11 @@ void splatt_tc_spals(
       getLvrgScore(model->factors[i], lev_score, model->rank, model->dims[i], i);
     }
 
+    // idx_t mode_a_size = 0.1 * model->dims[0];
+    // idx_t * imp_a = (idx_t *)malloc(mode_a_size * sizeof(idx_t));
+    // imp_a = reservoir_sample(lev_score[0], model->dims[0], mode_a_size);
+    // idx_t counter = 0;
+
     #pragma omp parallel
     {
       int const tid = splatt_omp_get_thread_num();
@@ -1569,7 +1687,23 @@ void splatt_tc_spals(
           for(idx_t i=parts[m][tid]; i < parts[m][tid+1]; ++i) {
             struct timeval start_t, stop_t;
             gettimeofday(&start_t, NULL);
-            p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime, aa);
+            // if(m==1){
+            //   if(i == imp_a[counter])
+            //     p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime, aa);
+            //   else if(i > imp_a[counter]){
+            //     for(idx_t xx = counter; xx < mode_a_size; xx++){
+            //       if(imp_a[xx] >= i){
+            //         counter = xx;
+            //         break;
+            //       }
+            //     }
+            //     if(i == imp_a[counter])
+            //       p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime, aa);    
+            //   }
+            // }
+            // else
+              p_update_slice(csf+m, 0, i, ws->regularization[m], model, ws, tid, lev_score, alpha, beta, act, frac, m, &solving_time, &sampling_time, &mttkrp_time, mttkrptime, solvingtime, samplingtime, aa);
+            
             gettimeofday(&stop_t, NULL);
             time_slice[m][i] = (stop_t.tv_sec + stop_t.tv_usec/1000000.0) - (start_t.tv_sec + start_t.tv_usec/1000000.0);
           }
