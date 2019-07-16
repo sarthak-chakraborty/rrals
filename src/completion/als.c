@@ -1014,22 +1014,57 @@ void splatt_tc_als(
   double avg_tot_time[3] = {0.0, 0.0, 0.0};
   int count=0;
 
-  FILE *f_lev = fopen("Leverage_als.csv", "w");
+  // FILE *f_lev = fopen("Leverage_als.csv", "w");
 
 
   sp_timer_t mode_timer;
   timer_reset(&mode_timer);
   timer_start(&ws->tc_time);
 
-  val_t **lev_score = (val_t **)malloc(nmodes * sizeof(val_t *));
-  for(int i=0; i<nmodes; i++)
-    lev_score[i] = (val_t *)malloc((model->dims[i])*sizeof(val_t));
+  // val_t **lev_score = (val_t **)malloc(nmodes * sizeof(val_t *));
+  // for(int i=0; i<nmodes; i++)
+  //   lev_score[i] = (val_t *)malloc((model->dims[i])*sizeof(val_t));
+
+
+  val_t moment_para = 0;
+  val_t ***factors = (val_t **)malloc(nmodes * sizeof(val_t**));
+  for(int i=0 ; i<nmodes; i++){
+    factors[i] = (val_t**)malloc(scoo->dims[i] * sizeof(val_t*));
+    for(int j=0; j<scoo->dims[i]; j++)
+      factors[i][j] = (val_t*)malloc(nfactors * sizeof(val_t));
+  }
 
   for(idx_t e=1; e < ws->max_its+1; ++e) {
     count++;
 
-    for(int i=0; i<nmodes; i++)
-      getLvrgScore(model->factors[i], lev_score, model->rank, model->dims[i], i);
+    if(e!=1){
+      if(restart_cond() && moment_para!=0.0){
+        moment_para = 0;
+        for(int i=0; i<nmodes; i++)
+          memcpy(model->factors[i], factors[i], (scoo->dims[i]*nfactors));
+      }
+      else
+        moment_para = linesearch();
+
+      for(int i=0; i<nmodes; i++){
+        val_t **update = (val_t **)malloc(scoo->dims[i] * sizeof(val_t *));
+        for(int j=0; j<scoo->dims[i]; j++){
+          update[j] = (val_t *)malloc(nfactors * sizeof(val_t));
+          memcpy(update[j], model->factors[i][j], nfactors);
+          for(int k=0; k<nfactors; k++)
+            update[j][k] += moment_para*(update[j][k] - factors[i][j][k]);
+        }
+        memcpy(factors[i], model->factors[i], (scoo->dims[i] * nfactors));
+        memcpy(model->factors[i], update, (scoo->dims[i]*nfactors));
+      }
+    }
+    else{
+      for(int i=0; i<nmodes; i++)
+        memcpy(factors[i], model->factors[i], (scoo->dims[i] * nfactors));
+    }
+
+    // for(int i=0; i<nmodes; i++)
+    //   getLvrgScore(model->factors[i], lev_score, model->rank, model->dims[i], i);
 
     #pragma omp parallel
     {
@@ -1063,9 +1098,9 @@ void splatt_tc_als(
         {
           timer_stop(&mode_timer);
           if(rank == 0) {
-            for(int i=0; i<model->dims[m]; i++)
-              fprintf(f_lev, "%lf,", lev_score[m][i]);
-            fprintf(f_lev, "\n");
+            // for(int i=0; i<model->dims[m]; i++)
+            //   fprintf(f_lev, "%lf,", lev_score[m][i]);
+            // fprintf(f_lev, "\n");
 
             avg_tot_time[m] += (double)mode_timer.seconds;
             avg_mttkrp_time[m] += mttkrp_time;
